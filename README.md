@@ -1,53 +1,70 @@
 # Nowhere Furniture Builder
 
-A tiny browser sandbox for prototyping flat-pack barrio furniture out of two
-materials: **sheet wood** (CNC plywood) and **reglar** (timber beams). Drag parts
-together, size them in millimetres, and read off a live cut list.
+A browser tool for designing and costing **burner-friendly outdoor furniture** for
+a festival barrio (built for Nowhere). Two materials only — **plywood sheet** +
+**reglar timber** — fastened with **Torx wood screws**. Pick a design from the
+catalog, tune its parametrics, read off the full metric **bill of materials**, and
+export cut sheets + shop drawings.
 
-Built for the Nowhere festival barrio build (10 people, knock-down / pack-flat,
-CNC-cut at home + hand-assembled on site).
+Inspired by the honest-plank lineage: **Enzo Mari's Autoprogettazione**, Rietveld's
+crate furniture, Donald Judd's plywood volumes, Prouvé, Perriand, Van Bo.
 
 ## Run
 
-It's a static page — no build step. Either:
+Static site, no build step. Visit it on the local server:
 
-- Open `index.html` directly, or
-- Visit it on the local server: <http://localhost/org/jonasjohansson/nowhere-furniture/>
+<http://localhost/org/jonasjohansson/nowhere-furniture/>
 
-(Needs internet the first time to pull Three.js from the CDN.)
+(Pulls Three.js from a CDN, so it needs internet the first time.)
+
+## What it does
+
+- **Catalog** of 9 parametric designs (chairs, benches, lounges, stool, daybed)
+- **3D builder** — orbit, select, move/rotate with a gizmo, grid-snap, live dimensions
+- **Live BOM** — plywood sheets (2D-nested), reglar (cut-optimised into stock lengths),
+  Torx screw schedule, rough SEK cost — recomputed on every edit
+- **Exports** — print-ready BOM (HTML/print), BOM + cut-list CSV, sheet-nesting SVG,
+  orthographic elevations SVG, and project save/load JSON
+
+## Architecture
+
+Modular ES modules against one pinned data contract (`PartSpec` / `Joint` / `Design`):
+
+| File | Role |
+|---|---|
+| `src/stock.js` | Shared contract + metric stock tables (plywood, reglar, Torx screws) |
+| `src/catalog.js` | The 9 parametric furniture designs (`CATALOG`, each with `build(params)`) |
+| `src/bom.js` | `computeBOM()` — sheet nesting + timber cut-optimisation + screw schedule |
+| `src/builder.js` | `Builder` class — Three.js scene, gizmo, selection, dimensions |
+| `src/export.js` | CSV / print-HTML / cut-sheet SVG / elevations SVG / project JSON |
+| `src/app.js` | Integration shell — wires catalog → builder → BOM → export |
+
+All dimensions are **metric, authored in millimetres**. The 3D scene works in metres
+internally; everything else stays in mm. Prices are rough SEK builder's-merchant
+estimates for ballparking, not quotes.
 
 ## Controls
 
 | Action | How |
 |---|---|
-| Select part | click it |
+| Select part | click · `Esc` deselect |
 | Orbit / zoom | drag / scroll |
-| Move gizmo | `W` |
-| Rotate gizmo | `E` |
-| Toggle snap (50 mm / 15°) | `S` |
-| Duplicate | `D` |
-| Delete | `Del` |
-| Deselect | `Esc` |
+| Move / Rotate gizmo | `W` / `E` |
+| Snap (50 mm / 15°) | `S` |
+| Dimensions on selected | `M` |
+| Add custom sheet / reglar | toolbar |
+| Duplicate / Delete | `D` / `Del` |
+| Fit view | `F` |
 
-## Parts
+## Stock (edit `src/stock.js` to match your supplier)
 
-- **Sheet** — plywood panel (default 600 × 440 × 18 mm)
-- **Reglar** — beam (default 1800 × 70 × 45 mm)
-- **Seat slat** — thin beam for slatted seats
-- **Leg** — square post
+- **Plywood** — 2440×1220 sheets in 12 / 15 / 18 / 21 mm
+- **Reglar** — 34×45, 45×45, 45×70, 45×95, 45×120 mm in 3.6–5.4 m lengths
+- **Screws** — Torx 4.0×40 … 6.0×120
 
-Edit any dimension in the inspector; geometry rebuilds live and the part stays
-resting on the ground. The cut list groups identical parts and totals plywood
-area + reglar length.
+## Roadmap
 
-## Save / load
-
-- **Save** stores the layout in your browser (localStorage)
-- **Export JSON** downloads the layout; **Import** reloads one
-
-## Roadmap ideas
-
-- Wedge / tab joinery primitives (not just boxes)
-- Sheet-nesting view (lay panels on a 2440 × 1220 sheet, count sheets)
-- Dimensioned 2D shop drawings export
-- DXF export of panel outlines for the CNC
+- Real wedge / tab / lap **joinery geometry** (parts are still boxes)
+- **DXF** export of panel outlines straight to the CNC
+- Per-part **rotation/length editing** for custom timber from the inspector
+- Wind/anchoring notes per design (Nowhere gusts)

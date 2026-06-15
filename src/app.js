@@ -1,0 +1,347 @@
+// ============================================================================
+// app.js — integration shell. Wires catalog -> builder -> BOM -> export.
+// ============================================================================
+import { Builder } from './builder.js';
+import { CATALOG } from './catalog.js';
+import { computeBOM, bomSummaryLine } from './bom.js';
+import { SHEETS, TIMBER } from './stock.js';
+import {
+  bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
+  downloadFile, exportProjectJSON, readProjectJSON, printHTML,
+} from './export.js';
+
+const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------------------
+// state
+// ---------------------------------------------------------------------------
+const builder = new Builder($('canvas'));
+let currentDesign = null;
+let currentParams = {};
+let currentJoints = [];   // joints from the active design template (drive screws)
+let lastParts = [];
+
+// ---------------------------------------------------------------------------
+// catalog list
+// ---------------------------------------------------------------------------
+function renderCatalog() {
+  const wrap = $('catalog-list');
+  wrap.innerHTML = '';
+  for (const d of CATALOG) {
+    const el = document.createElement('button');
+    el.className = 'cat-item';
+    el.dataset.id = d.id;
+    el.innerHTML = `<b>${d.name}</b><small>${d.designer}${d.year ? ' · ' + d.year : ''}</small>`;
+    el.onclick = () => selectDesign(d.id);
+    wrap.appendChild(el);
+  }
+}
+
+function markActiveCat(id) {
+  for (const el of document.querySelectorAll('.cat-item'))
+    el.classList.toggle('active', el.dataset.id === id);
+}
+
+// ---------------------------------------------------------------------------
+// design + parametric controls
+// ---------------------------------------------------------------------------
+function selectDesign(id) {
+  const d = CATALOG.find((x) => x.id === id);
+  if (!d) return;
+  currentDesign = d;
+  currentParams = {};
+  for (const p of d.params) currentParams[p.key] = p.default;
+  markActiveCat(id);
+  renderDesignHead();
+  renderParams();
+  rebuildFromParams();
+}
+
+function renderDesignHead() {
+  const d = currentDesign;
+  $('design-head').innerHTML = d
+    ? `<b>${d.name}</b><div class="by">${d.designer}${d.year ? ' · ' + d.year : ''}</div>
+       <div class="blurb">${d.blurb}</div>`
+    : '';
+}
+
+function renderParams() {
+  const wrap = $('params');
+  wrap.innerHTML = '';
+  if (!currentDesign) return;
+  for (const p of currentDesign.params) {
+    const row = document.createElement('div');
+    row.className = 'param';
+    row.innerHTML = `
+      <div class="top"><span>${p.label}</span>
+        <span class="val"><span data-val="${p.key}">${currentParams[p.key]}</span> ${p.unit || ''}</span></div>
+      <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${currentParams[p.key]}" data-key="${p.key}" />`;
+    const range = row.querySelector('input');
+    range.addEventListener('input', () => {
+      currentParams[p.key] = +range.value;
+      row.querySelector(`[data-val="${p.key}"]`).textContent = range.value;
+      rebuildFromParams();
+    });
+    wrap.appendChild(row);
+  }
+}
+
+function rebuildFromParams() {
+  if (!currentDesign) return;
+  let out;
+  try {
+    out = currentDesign.build(currentParams);
+  } catch (e) {
+    console.error('build failed', e);
+    toast('Design build error — see console');
+    return;
+  }
+  currentJoints = out.joints || [];   // set BEFORE loadParts so BOM uses them
+  builder.loadParts(out.parts || []); // emits 'change' -> recomputes BOM
+}
+
+// ---------------------------------------------------------------------------
+// builder events
+// ---------------------------------------------------------------------------
+builder.on('change', (parts) => {
+  lastParts = parts;
+  recomputeBOM();
+});
+builder.on('select', (spec) => renderInspector(spec));
+
+// ---------------------------------------------------------------------------
+// BOM panel
+// ---------------------------------------------------------------------------
+function currentBOM() {
+  return computeBOM({ parts: lastParts, joints: currentJoints });
+}
+
+function fmtSEK(n) {
+  return Math.round(n || 0).toLocaleString('sv-SE').replace(/ /g, ' ') + ' kr';
+}
+
+function recomputeBOM() {
+  const bom = currentBOM();
+  $('bom-summary').textContent = bomSummaryLine(bom);
+  const out = [];
+
+  if (bom.sheets.length) {
+    out.push('<h3>Plywood</h3><table>');
+    for (const r of bom.sheets) {
+      out.push(`<tr><td>${r.label} <span class="sub">×${r.sheetsNeeded} sheet${r.sheetsNeeded > 1 ? 's' : ''}</span>
+        <div class="sub">${r.partsCount} parts · ${Math.round((r.utilisation || 0) * 100)}% used</div></td>
+        <td class="r">${fmtSEK(r.lineTotal)}</td></tr>`);
+    }
+    out.push('</table>');
+  }
+  if (bom.timber.length) {
+    out.push('<h3>Reglar (timber)</h3><table>');
+    for (const r of bom.timber) {
+      const sticks = (r.sticks || []).map((s) => `${s.count}×${s.length}`).join(', ');
+      out.push(`<tr><td>${r.label} <span class="sub">${sticks}</span>
+        <div class="sub">${r.totalLengthM} m needed</div></td>
+        <td class="r">${fmtSEK(r.lineTotal)}</td></tr>`);
+    }
+    out.push('</table>');
+  }
+  if (bom.screws.length) {
+    out.push('<h3>Torx screws</h3><table>');
+    for (const r of bom.screws) {
+      out.push(`<tr><td>${r.label} <span class="sub">×${r.count} (${r.boxes} box${r.boxes > 1 ? 'es' : ''})</span></td>
+        <td class="r">${fmtSEK(r.lineTotal)}</td></tr>`);
+    }
+    out.push('</table>');
+  }
+
+  out.push(`<div class="grand"><span>Total</span><span>${fmtSEK(bom.totals.grandCost)}</span></div>`);
+  if (bom.warnings && bom.warnings.length)
+    out.push(`<div class="warn">⚠ ${bom.warnings.join('<br>⚠ ')}</div>`);
+
+  $('bom').innerHTML = out.join('');
+}
+
+// ---------------------------------------------------------------------------
+// inspector
+// ---------------------------------------------------------------------------
+function buildStockSelect() {
+  const sel = $('i-stock');
+  const groups = [['Plywood', SHEETS], ['Reglar', TIMBER]];
+  let html = '';
+  for (const [label, tbl] of groups) {
+    html += `<optgroup label="${label}">`;
+    for (const [key, rec] of Object.entries(tbl)) html += `<option value="${key}">${rec.label}</option>`;
+    html += '</optgroup>';
+  }
+  sel.innerHTML = html;
+}
+
+function renderInspector(spec) {
+  const has = !!spec;
+  $('inspect-empty').hidden = has;
+  $('inspect-body').hidden = !has;
+  if (!has) return;
+  $('i-name').value = spec.name || '';
+  $('i-stock').value = spec.stock || '';
+  $('i-w').value = Math.round(spec.size.w);
+  $('i-h').value = Math.round(spec.size.h);
+  $('i-d').value = Math.round(spec.size.d);
+}
+
+function patchSelected(patch) {
+  if (builder.selectedId) builder.updatePart(builder.selectedId, patch);
+}
+
+$('i-name').addEventListener('input', () => patchSelected({ name: $('i-name').value }));
+['i-w', 'i-h', 'i-d'].forEach((id) => $(id).addEventListener('input', () => {
+  patchSelected({ size: {
+    w: Math.max(1, +$('i-w').value || 1),
+    h: Math.max(1, +$('i-h').value || 1),
+    d: Math.max(1, +$('i-d').value || 1),
+  } });
+}));
+$('i-stock').addEventListener('change', () => {
+  const key = $('i-stock').value;
+  const sel = builder.getSelected();
+  if (!sel) return;
+  const patch = { stock: key };
+  if (SHEETS[key]) { patch.material = 'sheet'; patch.size = { ...sel.size, d: SHEETS[key].thickness }; }
+  else if (TIMBER[key]) {
+    patch.material = 'timber';
+    patch.size = sizeForTimber(sel.size, TIMBER[key].section);
+  }
+  patchSelected(patch);
+  renderInspector(builder.getSelected());
+});
+
+// keep the longest edge (length) and set the other two to the stock section
+function sizeForTimber(size, section) {
+  const axes = [['w', size.w], ['h', size.h], ['d', size.d]].sort((a, b) => b[1] - a[1]);
+  const out = { ...size };
+  out[axes[1][0]] = section.h;
+  out[axes[2][0]] = section.w;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// toolbar
+// ---------------------------------------------------------------------------
+function addCustomPart(material) {
+  const spec = material === 'sheet'
+    ? { ref: 'X', name: 'Custom panel', material: 'sheet', stock: 'ply18',
+        size: { w: 600, h: 440, d: 18 }, pos: { x: 0, y: 220, z: 0 }, rot: { x: 0, y: 0, z: 0 } }
+    : { ref: 'X', name: 'Custom reglar', material: 'timber', stock: 'reglar45x70',
+        size: { w: 1200, h: 70, d: 45 }, pos: { x: 0, y: 35, z: 0 }, rot: { x: 0, y: 0, z: 0 } };
+  builder.addPart(spec);
+}
+
+let dimsOn = false;
+$('toolbar').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  const act = btn.dataset.act;
+  switch (act) {
+    case 'move':   setMode('translate'); break;
+    case 'rotate': setMode('rotate'); break;
+    case 'snap':   { const on = !btn.classList.contains('active'); btn.classList.toggle('active', on); builder.setSnap(on); break; }
+    case 'dims':   { dimsOn = !dimsOn; btn.classList.toggle('active', dimsOn); builder.toggleDimensions(dimsOn); break; }
+    case 'add-sheet':  addCustomPart('sheet'); break;
+    case 'add-timber': addCustomPart('timber'); break;
+    case 'duplicate':  builder.duplicateSelected(); break;
+    case 'delete':     builder.deleteSelected(); break;
+    case 'frame':      builder.frameAll(); break;
+  }
+});
+
+function setMode(mode) {
+  builder.setMode(mode);
+  document.querySelector('[data-act=move]').classList.toggle('active', mode === 'translate');
+  document.querySelector('[data-act=rotate]').classList.toggle('active', mode === 'rotate');
+}
+
+// ---------------------------------------------------------------------------
+// keyboard
+// ---------------------------------------------------------------------------
+window.addEventListener('keydown', (e) => {
+  if (e.target.matches('input, select, textarea')) return;
+  switch (e.key.toLowerCase()) {
+    case 'w': setMode('translate'); break;
+    case 'e': setMode('rotate'); break;
+    case 's': { const b = document.querySelector('[data-act=snap]'); const on = !b.classList.contains('active'); b.classList.toggle('active', on); builder.setSnap(on); break; }
+    case 'm': { const b = document.querySelector('[data-act=dims]'); dimsOn = !dimsOn; b.classList.toggle('active', dimsOn); builder.toggleDimensions(dimsOn); break; }
+    case 'f': builder.frameAll(); break;
+    case 'd': if (builder.selectedId) { e.preventDefault(); builder.duplicateSelected(); } break;
+    case 'delete': case 'backspace': builder.deleteSelected(); break;
+    case 'escape': builder.select(null); break;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// export
+// ---------------------------------------------------------------------------
+function today() { return new Date().toISOString().slice(0, 10); }
+
+function pieceSummary() {
+  const m = new Map();
+  for (const p of lastParts) m.set(p.name, (m.get(p.name) || 0) + 1);
+  return [...m].map(([name, qty]) => ({ name, qty }));
+}
+
+function exportMeta() {
+  return {
+    projectName: currentDesign ? currentDesign.name : 'Nowhere build',
+    designer: currentDesign ? currentDesign.designer : '',
+    date: today(),
+    parts: lastParts,
+    pieces: pieceSummary(),
+  };
+}
+
+$('right').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-exp]'); if (!btn) return;
+  const bom = currentBOM();
+  switch (btn.dataset.exp) {
+    case 'print':      printHTML(bomToHTML(bom, exportMeta())); break;
+    case 'bom-csv':    downloadFile('nowhere-bom.csv', bomToCSV(bom), 'text/csv'); break;
+    case 'parts-csv':  downloadFile('nowhere-cutlist.csv', partsToCSV(lastParts), 'text/csv'); break;
+    case 'cutsheet':   downloadFile('nowhere-cutsheets.svg', buildCutSheetSVG(bom), 'image/svg+xml'); break;
+    case 'elevations': downloadFile('nowhere-elevations.svg', buildElevationsSVG(lastParts), 'image/svg+xml'); break;
+    case 'save':       exportProjectJSON({ design: currentDesign?.id, params: currentParams, parts: lastParts }, 'nowhere-project.json'); break;
+    case 'load':       $('file-input').click(); break;
+  }
+});
+
+$('file-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  try {
+    const state = await readProjectJSON(file);
+    if (state.design && CATALOG.find((d) => d.id === state.design)) {
+      currentDesign = CATALOG.find((d) => d.id === state.design);
+      currentParams = { ...{}, ...state.params };
+      // fill any missing params with defaults
+      for (const p of currentDesign.params) if (currentParams[p.key] == null) currentParams[p.key] = p.default;
+      markActiveCat(currentDesign.id);
+      renderDesignHead(); renderParams(); rebuildFromParams();
+    } else {
+      currentDesign = null; currentJoints = [];
+      renderDesignHead(); renderParams();
+      builder.loadParts(state.parts || []);
+    }
+    toast('Project loaded');
+  } catch (err) { console.error(err); toast('Could not load file'); }
+  e.target.value = '';
+});
+
+// ---------------------------------------------------------------------------
+// toast
+// ---------------------------------------------------------------------------
+let toastTimer;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1700);
+}
+
+// ---------------------------------------------------------------------------
+// boot
+// ---------------------------------------------------------------------------
+buildStockSelect();
+renderCatalog();
+selectDesign('barrio-communal-bench'); // sensible default for a 10-person barrio

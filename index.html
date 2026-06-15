@@ -4,74 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Nowhere Furniture Builder</title>
-<style>
-  :root {
-    --bg: #f4f1ea;
-    --panel: #ffffff;
-    --ink: #2b2b2b;
-    --muted: #7a7466;
-    --line: #ddd6c8;
-    --accent: #c2703d;
-    --sheet: #d9b382;
-    --reglar: #b98a4e;
-    --radius: 8px;
-    --pad: 12px;
-    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; font-family: var(--font); color: var(--ink); }
-  #app { display: flex; height: 100vh; }
-  #scene { flex: 1; position: relative; background: var(--bg); }
-  canvas { display: block; }
-
-  #panel {
-    width: 280px; background: var(--panel); border-left: 1px solid var(--line);
-    overflow-y: auto; display: flex; flex-direction: column; gap: 0;
-  }
-  .section { padding: var(--pad); border-bottom: 1px solid var(--line); }
-  .section h2 {
-    margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--muted); font-weight: 600;
-  }
-  .row { display: flex; gap: 6px; flex-wrap: wrap; }
-  button {
-    font-family: var(--font); font-size: 13px; padding: 7px 10px; cursor: pointer;
-    border: 1px solid var(--line); background: #fff; border-radius: var(--radius);
-    color: var(--ink); transition: background .12s, border-color .12s;
-  }
-  button:hover { background: #f0ece2; }
-  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  button.primary:hover { background: #a85d30; }
-  button:disabled { opacity: .4; cursor: not-allowed; }
-
-  .field { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; gap: 8px; }
-  .field label { font-size: 12px; color: var(--muted); flex: 0 0 auto; width: 70px; }
-  .field input {
-    flex: 1; min-width: 0; padding: 5px 7px; font-size: 13px; font-family: var(--font);
-    border: 1px solid var(--line); border-radius: 6px; background: #fbfaf6;
-  }
-  .field .unit { font-size: 11px; color: var(--muted); width: 22px; text-align: right; }
-
-  #cutlist table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #cutlist td { padding: 3px 0; border-bottom: 1px dotted var(--line); }
-  #cutlist td:last-child { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-  #cutlist .totals { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
-
-  #empty { color: var(--muted); font-size: 12px; font-style: italic; }
-  .hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
-  kbd {
-    background: #f0ece2; border: 1px solid var(--line); border-bottom-width: 2px;
-    border-radius: 4px; padding: 0 4px; font-size: 11px; font-family: ui-monospace, monospace;
-  }
-  #title { font-weight: 700; font-size: 14px; }
-  #title span { color: var(--muted); font-weight: 400; font-size: 11px; display: block; }
-  #toast {
-    position: absolute; bottom: 14px; left: 14px; background: rgba(43,43,43,.9); color: #fff;
-    padding: 8px 12px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .2s;
-    pointer-events: none;
-  }
-  #toast.show { opacity: 1; }
-</style>
+<link rel="stylesheet" href="styles.css" />
 <script type="importmap">
 {
   "imports": {
@@ -83,71 +16,95 @@
 </head>
 <body>
 <div id="app">
-  <div id="scene"><div id="toast"></div></div>
-  <div id="panel">
+
+  <!-- LEFT: catalog ---------------------------------------------------------->
+  <aside id="left">
+    <div class="brand">
+      Nowhere Furniture
+      <span>Enzo Mari &amp; the honest-plank school · metric · Torx</span>
+    </div>
     <div class="section">
-      <div id="title">Nowhere Furniture<span>flat-pack prototyping sandbox</span></div>
+      <h2>Catalog</h2>
+      <div id="catalog-list"></div>
+    </div>
+    <div class="section">
+      <h2>About</h2>
+      <p class="muted small">
+        Burner-friendly outdoor furniture from two materials only — plywood
+        sheet + reglar timber — screwed together with Torx. Pick a design,
+        tune it, read off the full bill of materials, export the cut sheets.
+      </p>
+    </div>
+  </aside>
+
+  <!-- CENTER: 3D stage -------------------------------------------------------->
+  <main id="stage">
+    <div id="toolbar">
+      <div class="group">
+        <button data-act="move" class="active" title="Move (W)">↔ Move</button>
+        <button data-act="rotate" title="Rotate (E)">⟳ Rotate</button>
+      </div>
+      <div class="group">
+        <button data-act="snap" class="active" title="Snap (S)">⊞ Snap</button>
+        <button data-act="dims" title="Dimensions (M)">⊹ Dims</button>
+      </div>
+      <div class="group">
+        <button data-act="add-sheet">+ Sheet</button>
+        <button data-act="add-timber">+ Reglar</button>
+      </div>
+      <div class="group">
+        <button data-act="duplicate" title="Duplicate (D)">⧉ Duplicate</button>
+        <button data-act="delete" title="Delete (Del)">🗑 Delete</button>
+      </div>
+      <div class="group">
+        <button data-act="frame" title="Fit view (F)">⤢ Fit</button>
+      </div>
+    </div>
+    <div id="canvas"></div>
+    <div id="toast"></div>
+  </main>
+
+  <!-- RIGHT: panels ----------------------------------------------------------->
+  <aside id="right">
+    <div class="section" id="design-section">
+      <h2>Design</h2>
+      <div id="design-head"></div>
+      <div id="params"></div>
     </div>
 
-    <div class="section">
-      <h2>Add part</h2>
-      <div class="row">
-        <button id="add-sheet">+ Sheet</button>
-        <button id="add-reglar">+ Reglar</button>
-      </div>
-      <div class="row" style="margin-top:6px">
-        <button id="add-slat">+ Seat slat</button>
-        <button id="add-leg">+ Leg</button>
-      </div>
-    </div>
-
-    <div class="section" id="inspector">
+    <div class="section" id="inspect-section">
       <h2>Selected part</h2>
-      <div id="empty">Nothing selected. Click a part.</div>
-      <div id="inspector-body" style="display:none">
+      <div id="inspect-empty" class="muted small">Click a part to edit it.</div>
+      <div id="inspect-body" hidden>
         <div class="field"><label>Name</label><input id="i-name" type="text" /></div>
-        <div class="field"><label>Width</label><input id="i-w" type="number" step="1" /><span class="unit">mm</span></div>
-        <div class="field"><label>Height</label><input id="i-h" type="number" step="1" /><span class="unit">mm</span></div>
-        <div class="field"><label>Depth</label><input id="i-d" type="number" step="1" /><span class="unit">mm</span></div>
-        <div class="row" style="margin-top:8px">
-          <button id="rot-y">Rotate 90° ⟳</button>
-          <button id="lay-flat">Lay / stand</button>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <button id="duplicate">Duplicate</button>
-          <button id="delete">Delete</button>
-        </div>
+        <div class="field"><label>Stock</label><select id="i-stock"></select></div>
+        <div class="field"><label>Width</label><input id="i-w" type="number" step="1" /><span class="u">mm</span></div>
+        <div class="field"><label>Height</label><input id="i-h" type="number" step="1" /><span class="u">mm</span></div>
+        <div class="field"><label>Depth</label><input id="i-d" type="number" step="1" /><span class="u">mm</span></div>
       </div>
     </div>
 
-    <div class="section" id="cutlist">
-      <h2>Cut list</h2>
-      <table id="cutlist-table"><tbody></tbody></table>
-      <div class="totals" id="cutlist-totals"></div>
+    <div class="section" id="bom-section">
+      <h2>Bill of materials</h2>
+      <div id="bom-summary" class="muted small"></div>
+      <div id="bom"></div>
     </div>
 
     <div class="section">
-      <h2>Project</h2>
-      <div class="row">
-        <button id="save">Save</button>
-        <button id="export">Export JSON</button>
-        <button id="import">Import</button>
-        <button id="clear">Clear all</button>
+      <h2>Export</h2>
+      <div class="btn-grid">
+        <button data-exp="print">🖨 Print BOM</button>
+        <button data-exp="bom-csv">BOM .csv</button>
+        <button data-exp="parts-csv">Cut list .csv</button>
+        <button data-exp="cutsheet">Cut sheets .svg</button>
+        <button data-exp="elevations">Elevations .svg</button>
+        <button data-exp="save">Save .json</button>
+        <button data-exp="load">Load .json</button>
       </div>
-      <input id="file-input" type="file" accept="application/json" style="display:none" />
+      <input id="file-input" type="file" accept="application/json" hidden />
     </div>
-
-    <div class="section">
-      <h2>Controls</h2>
-      <div class="hint">
-        <kbd>click</kbd> select · <kbd>drag</kbd> orbit<br>
-        <kbd>W</kbd> move · <kbd>E</kbd> rotate gizmo<br>
-        <kbd>S</kbd> toggle snap · <kbd>D</kbd> duplicate<br>
-        <kbd>Del</kbd> delete · <kbd>Esc</kbd> deselect
-      </div>
-    </div>
-  </div>
+  </aside>
 </div>
-<script type="module" src="main.js"></script>
+<script type="module" src="src/app.js"></script>
 </body>
 </html>
