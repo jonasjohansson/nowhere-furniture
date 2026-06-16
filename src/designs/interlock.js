@@ -19,7 +19,7 @@ import {
   ERGO, panel,
   faceJoint, panelEdgeJoint,
   SHEETS,
-} from '../engineering.js?v=13';
+} from '../engineering.js?v=14';
 
 const PLY = (key) => SHEETS[key].thickness;   // sheet thickness in mm
 

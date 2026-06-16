@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=13';
-import { CATALOG } from './catalog.js?v=13';
-import { computeBOM, bomSummaryLine } from './bom.js?v=13';
-import { SHEETS, TIMBER } from './stock.js?v=13';
-import { MATERIALS } from './materials.js?v=13';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=13';
+import { Builder } from './builder.js?v=14';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=14';
+import { computeBOM, bomSummaryLine } from './bom.js?v=14';
+import { SHEETS, TIMBER } from './stock.js?v=14';
+import { MATERIALS } from './materials.js?v=14';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=14';
 import {
   bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=13';
+} from './export.js?v=14';
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,13 +30,26 @@ let lastParts = [];
 function renderCatalog() {
   const wrap = $('catalog-list');
   wrap.innerHTML = '';
+  // Group by category, in CATEGORY_ORDER; keep RAW order within each group.
+  const groups = new Map(CATEGORY_ORDER.map((c) => [c, []]));
   for (const d of CATALOG) {
-    const el = document.createElement('button');
-    el.className = 'cat-item';
-    el.dataset.id = d.id;
-    el.innerHTML = `<b>${d.name}</b><small>${d.designer}${d.year ? ' · ' + d.year : ''}</small>`;
-    el.onclick = () => selectDesign(d.id);
-    wrap.appendChild(el);
+    if (!groups.has(d.category)) groups.set(d.category, []);
+    groups.get(d.category).push(d);
+  }
+  for (const [cat, items] of groups) {
+    if (!items.length) continue;
+    const head = document.createElement('div');
+    head.className = 'cat-group';
+    head.textContent = cat;
+    wrap.appendChild(head);
+    for (const d of items) {
+      const el = document.createElement('button');
+      el.className = 'cat-item';
+      el.dataset.id = d.id;
+      el.innerHTML = `<b>${d.name}</b>`;
+      el.onclick = () => selectDesign(d.id);
+      wrap.appendChild(el);
+    }
   }
 }
 
@@ -63,27 +76,24 @@ function selectDesign(id) {
 function renderDesignHead() {
   const d = currentDesign;
   if (!d) { $('design-head').innerHTML = ''; return; }
-  const badges = [d.difficulty ? t(d.difficulty) : null, d.buildTime].filter(Boolean)
-    .map((b) => `<span class="badge">${b}</span>`).join('');
-  $('design-head').innerHTML =
-    `<b>${d.name}</b><div class="by">${d.designer}${d.year ? ' · ' + d.year : ''}</div>
-     ${badges ? `<div class="badges">${badges}</div>` : ''}
-     <div class="blurb">${d.blurb}</div>`;
+  // One compact meta line — designer · year · difficulty · build time. No blurb;
+  // the assembly steps below carry the substance.
+  const meta = [
+    d.designer, d.year, d.difficulty ? t(d.difficulty) : null, d.buildTime,
+  ].filter(Boolean).join(' · ');
+  $('design-head').innerHTML = `<b>${d.name}</b><div class="by">${meta}</div>`;
 }
 
 function renderBuildInfo(build) {
   const el = $('buildinfo');
   if (!build) { el.innerHTML = ''; return; }
+  // Keep the panel lean: assembly steps only (the build-critical text). The
+  // engineering notes still ride along in build() for export, just not on screen.
   let html = '';
   if (build.steps && build.steps.length) {
     html += `<div class="bi"><h4>${t('asmSteps')}</h4><ol>`;
     for (const s of build.steps) html += `<li>${s}</li>`;
     html += '</ol></div>';
-  }
-  if (build.notes && build.notes.length) {
-    html += `<div class="bi"><h4>${t('engNotes')}</h4><ul>`;
-    for (const n of build.notes) html += `<li>${n}</li>`;
-    html += '</ul></div>';
   }
   el.innerHTML = html;
 }

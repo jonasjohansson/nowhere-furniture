@@ -27,10 +27,10 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js?v=13';
-import { disposeWoodCache } from './wood.js?v=13';
-import { materialMaterial } from './materials.js?v=13';
-import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=13';
+import { SHEETS, TIMBER, MM } from './stock.js?v=14';
+import { disposeWoodCache } from './wood.js?v=14';
+import { materialMaterial } from './materials.js?v=14';
+import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=14';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -202,8 +202,8 @@ export class Builder {
     this.hemiLight = hemi;
 
     // Key directional light — soft PCF shadows, warm daylight colour.
-    const dir = new THREE.DirectionalLight(0xfff4e2, 0.75);
-    dir.position.set(3, 5, 2);
+    const dir = new THREE.DirectionalLight(0xfff4e2, 1.15);
+    dir.position.set(4, 5, 2.5);
     dir.castShadow = true;
     dir.shadow.mapSize.set(2048, 2048);
     dir.shadow.camera.near = 0.5;
@@ -214,7 +214,7 @@ export class Builder {
     sc.updateProjectionMatrix();
     dir.shadow.bias = -0.0004;
     dir.shadow.normalBias = 0.02;
-    dir.shadow.radius = 3; // soften the PCF penumbra a touch
+    dir.shadow.radius = 2.2; // soft PCF penumbra, but defined enough to read on sand
     this.scene.add(dir);
     this.dirLight = dir;
 
@@ -272,13 +272,15 @@ export class Builder {
     const contact = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({
-        map: contactTex, transparent: true, opacity: 0.5,
+        map: contactTex, transparent: true, opacity: 0.55,
         depthWrite: false, color: 0x000000,
       })
     );
     contact.rotation.x = -Math.PI / 2;
-    contact.position.y = 0.0008; // just above the ground, below the grid
-    contact.renderOrder = -1;
+    contact.position.y = 0.002; // just above the ground
+    // Draw AFTER the opaque sand ground (which has no renderOrder) so the soft
+    // blob lands on top of it instead of being painted over.
+    contact.renderOrder = 2;
     contact.scale.set(2.5, 2.5, 1);
     this.scene.add(contact);
     this.contactShadow = contact;
@@ -1105,7 +1107,12 @@ export class Builder {
       const tint = new THREE.Color(item.spec.color);
       const arr = Array.isArray(mat) ? mat : [mat];
       for (const m of arr) {
-        m.color.lerp(tint, 0.62); // blend toward the accent hue (strong enough to read on dark wood)
+        // Painted-plywood: colour drives the albedo, the dark wood photo map is
+        // dropped so distinct/random colours read true (not multiplied to brown).
+        // Grain still lives in the normal + roughness maps → painted ply, not plastic.
+        m.color.copy(tint);
+        if (m.map) { if (m.map.dispose) m.map.dispose(); m.map = null; }
+        m.envMapIntensity = 0.32;
         m.needsUpdate = true;
       }
     }
