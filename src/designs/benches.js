@@ -413,42 +413,75 @@ export const BENCHES = [
       joints.push(panelEdgeJoint(slatStock, p.len, 600,
         `each of ${seatField.count} seat slats screwed down to every bearer`));
 
-      // ---- back rails + back slats (on the raked posts) ---------------------
-      // Two horizontal back rails (top + mid) span between the back posts; the
-      // back slats fix to them. Because the posts are raked, the rails sit at
-      // the rear, offset by the rake at their height. We keep the rails running
-      // along x between the posts and let the slats run along x too (horizontal
-      // slats read calmer and are stronger across the lean).
-      const backTopY = seatTop + p.backH;
-      const backMidY = seatTop + p.backH * 0.45;
-      const railLen  = p.len - 2 * legSec.w;
-      [['BRAIL-T', backTopY], ['BRAIL-M', backMidY]].forEach(([ref, y]) => {
-        // rearward offset of the post at this height (above the seat pivot):
-        const above = y - seatTop;
-        const zoff = backZ - Math.tan(rakeRad) * above;
-        parts.push(beam(
-          ref, 'Back rail', backRailStock,
-          railLen, 'x',
-          { x: 0, y, z: zoff },
-          'Back frame',
-        ));
+      // ---- back: a single RAKED PLANE of horizontal slats on the posts ------
+      // The back posts are raked (rot.x = rake), so the back is NOT a vertical
+      // plane — it's a leaning plane. Every back member must lie IN that plane:
+      // rotated by the SAME rake and offset out to sit flush on the FRONT face
+      // of the posts (so the slats actually touch/screw to the posts). If we
+      // left them at rot 0 they'd stick straight out at scattered depths — the
+      // "staircase" bug. Instead we march UP the post's own length axis and lay
+      // each slat flush, evenly spaced, with the top slat flush to the post top.
+      //
+      // Post geometry, replayed exactly so members land on the real BP posts.
+      // BP is a beam on axis 'y' (length postLen), centred at
+      //   pos = { y: postLen/2, z: backZ - topDrop/2 }, rot.x = rake.
+      // A point at local length-coord `ly` (−postLen/2..+postLen/2 up the post)
+      // sits on the post CENTRELINE at:
+      const postCZ = backZ - topDrop / 2;                 // post centre z
+      const postCentreline = (ly) => ({
+        y: ly * Math.cos(rakeRad) + postLen / 2,
+        z: ly * Math.sin(rakeRad) + postCZ,
+      });
+      // Post FRONT-face outward normal (local +z of the post, rotated by rake):
+      //   local [0,0,1] -> world ( y:-sin(rake), z:+cos(rake) ).
+      const frontNy = -Math.sin(rakeRad);
+      const frontNz =  Math.cos(rakeRad);
+      // Post cross-section (axis 'y' beam, stock reglar45x70): d-dim (z) = 70.
+      const postHalfD = legSec.h / 2;                     // 35 (half post depth)
+      // A back member, axis 'x' (stock reglar45x70): d-dim (z) = 70 -> half 35.
+      const backHalfD = slatSec.h / 2;                    // 35
+      const flushOff  = postHalfD + backHalfD;            // sit flush, no overlap
+      // Given a length-coord up the post, return the flush member CENTRE that
+      // lies in the raked plane against the post front face at that height.
+      const flushCentre = (ly) => {
+        const c = postCentreline(ly);
+        return { y: c.y + flushOff * frontNy, z: c.z + flushOff * frontNz };
+      };
+      const railLen   = p.len - 2 * legSec.w;
+      const backRake  = { x: rake, y: 0, z: 0 };          // same lean as posts
+      // Usable run of the back ALONG the post: from the seat-level pivot up to
+      // the post top. ly_seat = where the centreline crosses y=seatTop.
+      const lySeat = (seatTop - postLen / 2) / Math.cos(rakeRad);
+      const lyTop  = postLen / 2;                          // post top
+      const halfRun = slatSec.h / 2;                       // member half-length along the post (h=45)
+      // Top + mid rails the slats also screw to, placed up the post by fraction.
+      const lyRail = (frac) => lySeat + frac * (lyTop - lySeat);
+      [['BRAIL-T', lyTop - halfRun], ['BRAIL-M', lyRail(0.45)]].forEach(([ref, ly]) => {
+        const c = flushCentre(ly);
+        parts.push({
+          ...beam(ref, 'Back rail (in raked plane)', backRailStock,
+            railLen, 'x', { x: 0, y: c.y, z: c.z }, 'Back frame'),
+          rot: { ...backRake },
+        });
       });
       joints.push(buttJoint(backRailStock, 2 * 2,
-        'top + mid back rails into both back posts, 2 per end'));
-      // Horizontal back slats between the two rails.
-      const backField = slatField(p.backH * 0.85, slatSec.h, 14, seatTop + p.backH * 0.12);
-      backField.positions.forEach((y, i) => {
-        const above = y - seatTop;
-        const zoff = backZ - Math.tan(rakeRad) * above - slatThick / 2;
-        parts.push(beam(
-          `BSLAT-${i + 1}`, 'Back slat', slatStock,
-          railLen - 4, 'x',
-          { x: 0, y, z: zoff },
-          'Back slats',
-        ));
+        'top + mid back rails screwed to both raked back posts, 2 per end (flush in the lean plane)'));
+      // Horizontal back slats, evenly spaced UP the post between just above the
+      // seat and the top rail, each flush on the posts and raked into the plane.
+      const runStart = lySeat + halfRun + 20;              // clear the seat
+      const runEnd   = lyTop - halfRun;                    // top slat flush to post top
+      const backField = slatField(runEnd - runStart, slatSec.h, 14, runStart + halfRun);
+      backField.positions.forEach((ly, i) => {
+        const c = flushCentre(ly);
+        parts.push({
+          ...beam(`BSLAT-${i + 1}`, 'Back slat (in raked plane)', slatStock,
+            railLen - 4, 'x', { x: 0, y: c.y, z: c.z }, 'Back slats'),
+          rot: { ...backRake },
+        });
       });
       joints.push(faceJoint(slatThick, backField.count * 2,
-        `each of ${backField.count} back slats screwed to the back posts/rails`));
+        `each of ${backField.count} back slats screwed flat to the raked back posts ` +
+        '(and the top/mid back rails), lying flush in the lean plane'));
 
       const review = reviewBuild({
         parts, seatH: p.seatH, seatSpan: clearSpan, seatStock: bearerStock,
@@ -460,7 +493,7 @@ export const BENCHES = [
         '3. Drop in any interior seat bearer(s) added for length, evenly spaced.',
         '4. Tie the two frames together with the front + back tie rails under the seat (squares the long plane).',
         '5. Screw the seat slats down across the bearers using a 10mm spacer.',
-        '6. Fit the top + mid back rails between the raked posts, then screw the horizontal back slats to them.',
+        '6. Fit the top + mid back rails flush against the front face of the raked posts, then screw the horizontal back slats up the posts in the same lean plane (top slat flush with the post tops) — every slat lands flat on the posts.',
         '7. Sit-test the rake and rock-test the frame; anchor before wind (see notes).',
       ];
 

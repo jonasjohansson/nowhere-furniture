@@ -19,7 +19,7 @@
 // ============================================================================
 
 import {
-  ERGO, beam, leg, panel, cleat, frameBase, slatField,
+  ERGO, beam, plank, leg, panel, cleat, frameBase, slatField,
   buttJoint, panelEdgeJoint, faceJoint, panelSupportSpacing,
   difficultyOf, SHEETS, TIMBER,
 } from '../engineering.js';
@@ -275,20 +275,21 @@ export const STOOLS = [
       const cleatStock = 'reglar34x45';   // locator cleats under the top
 
       const plankSec = SEC(plankStock);   // 45x70
-      // NOTE the engineering beam() factory always puts section.h on the
-      // vertical (y) axis and section.w across for a horizontal member. So a
-      // 45×70 plank laid as a top plank stands 70mm tall (section.h) and 45mm
-      // wide (section.w) — i.e. on edge, which is the stiff, sag-resistant way
-      // to run a 2.4m top plank anyway.
-      const plankThick = plankSec.h;      // 70 — the plank's VERTICAL dimension
-      const plankWidth = plankSec.w;      // 45 — the plank's width across the top
+      // Top planks lie FLAT (wide face up) via plank(): the WIDE section dim (70)
+      // runs ACROSS the top and the NARROW dim (45) is the board's THICKNESS
+      // (vertical). This makes a real flat eating surface — not a row of on-edge
+      // fins with deep slots. Flat is less stiff than on-edge, so the cross-bearers
+      // below carry the field (see nBearers) and no plank free-spans too far.
+      const plankThick = Math.min(plankSec.w, plankSec.h); // 45 — VERTICAL thickness
+      const plankWidth = Math.max(plankSec.w, plankSec.h); // 70 — across the top
 
       // The top sits ON the apron base. frameBase puts the apron TOP at (h - 10),
       // not at h, so for the plank underside to land exactly on the apron top —
-      // and the finished top surface to sit at topH — the base height passed to
+      // and the finished top SURFACE to sit at topH — the base height passed to
       // frameBase must be: apronTop + plankThick = topH, with apronTop = h - 10.
       //   => h = topH - plankThick + 10
-      // This is what seats the top on the base instead of floating it 10mm clear.
+      // Flat planks are thinner (45 vs the old on-edge 70), so the base rises to
+      // keep the surface exactly at topH. This seats the top on the base, no float.
       const apronTopY = p.topH - plankThick;          // underside-of-planks plane
       const baseH = apronTopY + 10;                   // frameBase's apronTop = h - 10
 
@@ -312,7 +313,8 @@ export const STOOLS = [
       // top overhangs the apron rectangle for knee clearance), so the planks must
       // bear on members that span the WHOLE width. These run along x at apron-top
       // height (their top flush with the apron top), spaced along the length so no
-      // plank ever spans bearer-to-bearer further than a seat bearer safely can.
+      // plank ever free-spans more than ~600mm — important now the planks are laid
+      // FLAT (45mm thick) and so less stiff than the old on-edge orientation.
       // The planks (running z) cross every bearer => every plank is supported.
       // beam() laid along x renders section.w on the vertical (y) axis, so a
       // 45×95 stick lying flat along x stands bearerSec.w (=45) tall. Seat the
@@ -335,15 +337,16 @@ export const STOOLS = [
       joints.push(buttJoint(apronStock, nBearers * 4,
         `${nBearers} cross-bearers, 2 screws into each long side apron`));
 
-      // --- TOP: a field of planks running the LENGTH (z), spread across WIDTH (x). ---
+      // --- TOP: a field of FLAT planks running the LENGTH (z), across WIDTH (x). ---
+      // plank() lays each board wide-face-up (flat) for a real eating surface.
       // slatField self-spaces n planks across the width to the target gap, so the
-      // top reads like the bench seats. Planks run the full length and now rest
+      // top reads like the bench seats. Planks run the full length and rest
       // directly on the full-width cross-bearers (and on the front/back aprons),
       // their underside on the apron-top plane — the top SITS on the base.
       const topY = apronTopY + plankThick / 2;        // bottom of planks == apron top
       const field = slatField(p.width, plankWidth, p.gap);
       field.positions.forEach((x, i) => {
-        parts.push(beam(`PLANK-${i + 1}`, `Top plank ${i + 1}`, plankStock,
+        parts.push(plank(`PLANK-${i + 1}`, `Top plank ${i + 1}`, plankStock,
           p.len, 'z', { x, y: topY, z: 0 }, 'Top'));
       });
       // each plank screwed down into the cross-bearers (2 screws per bearer).
@@ -372,7 +375,7 @@ export const STOOLS = [
         `Cut and fit ${nBearers} full-width cross-bearers (${apronStock}) between the two long ` +
           'side aprons, their TOP edge flush with the apron top, evenly along the length — ' +
           'these are what the whole plank field rests on, including the overhanging outer planks.',
-        `Cut ${field.count} top planks to length and lay them face-up with the ${p.gap}mm gaps.`,
+        `Cut ${field.count} top planks to length and lay them FLAT (wide face up) with the ${p.gap}mm gaps — a proper flat eating surface, not on-edge fins.`,
         'Screw the two locator cleats across the underside of the plank field, set to drop just ' +
           'inside the short-end aprons — this binds the planks into one liftable mat.',
         'Drop the plank mat onto the base (it lands on the cross-bearers, cleats locate it ' +
@@ -384,9 +387,13 @@ export const STOOLS = [
         'frameBase() leg/apron strategy: four corner legs (45×95) tied by four 45×95 aprons ' +
           'set just under the top — the deep aprons triangulate against racking, giving a ' +
           'rigid base with no stretcher in the leg room, so 8–10 people get clear knees.',
+        `Top planks lie FLAT (wide ${plankWidth}mm face up, ${plankThick}mm thick) for a real eating ` +
+          'surface, not on-edge fins with deep slots. The surface stays at the dining height because ' +
+          `the base rose to ${baseH}mm under the thinner flat planks.`,
         `The top SITS on the base: ${nBearers} full-width cross-bearers run flush with the apron ` +
-          'top, so every plank — including the two that overhang the apron rectangle for knee ' +
-          'clearance — physically rests on a bearer. Nothing floats; the slab is fully carried.',
+          'top, so every plank — including the ones that overhang the apron rectangle for knee ' +
+          'clearance — physically rests on a bearer, and flat (less stiff) planks never free-span ' +
+          'more than ~600mm. Nothing floats; the slab is fully carried.',
         `Seats ~8–10: at ${p.len}mm length that is ~${Math.floor(p.len / 600)} per long side ` +
           'plus one at each end (~600mm of edge per person).',
         'Knock-down: the plank top lifts straight off (located, not fixed, by two cleats that ' +

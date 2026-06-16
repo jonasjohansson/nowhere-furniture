@@ -17,9 +17,9 @@
 // ============================================================================
 
 import {
-  ERGO, beam, leg, panel, cleat, frameBase, slatField,
+  ERGO, beam, plank, leg, panel, cleat, frameBase, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
-  difficultyOf, SHEETS, TIMBER,
+  panelSupportSpacing, difficultyOf, SHEETS, TIMBER,
 } from '../engineering.js';
 
 // Small local readability helpers (pure). Thickness/section pulled from stock so
@@ -267,11 +267,13 @@ export const MARI = [
   // --------------------------------------------------------------------------
   // Construction logic: frameBase() gives the honest four-leg + apron base in
   // one call (legs at the corners, aprons just under the top for rigidity).
-  // On top of that we lay a plank field — reglar boards run the length, evenly
-  // gapped with slatField(), each screwed down into the aprons — plus two end
-  // battens (breadboard ends) under the top to tie the planks together and stop
-  // them cupping. The top is sized to seat the bench down each long side at
-  // dining height (~730 mm), with apron kept high enough for real knee clearance.
+  // On top of that we lay a FLAT plank field — reglar boards laid wide-face-up
+  // (plank()), running the length, evenly gapped with slatField() — so the top
+  // is a real flat eating surface, not a row of on-edge fins. Because flat boards
+  // are less stiff than on-edge, full-width cross-bearers run across the width at
+  // apron-top level so every plank rests on a bearer and nothing free-spans too
+  // far. The top is sized to seat the bench down each long side at dining height
+  // (~730 mm), with apron kept high enough for real knee clearance.
   // ==========================================================================
   {
     id: 'mari-tavolo',
@@ -280,9 +282,9 @@ export const MARI = [
     year: 1974,
     blurb:
       'Autoprogettazione dining table: a four-leg + apron base (frameBase) ' +
-      'carrying a plank top with even gaps, battened underneath so it stays ' +
-      'flat. Sized at dining height to seat the Mari Panca down each side. ' +
-      'Everything butt-jointed and screwed from where you can reach.',
+      'carrying a flat plank top (boards laid wide-face-up) with even gaps, on ' +
+      'full-width cross-bearers so it stays flat. Sized at dining height to seat ' +
+      'the Mari Panca down each side. Butt-jointed and screwed from where you reach.',
     difficulty: 'Moderate',
     buildTime: '4-5 h',
     params: [
@@ -294,17 +296,24 @@ export const MARI = [
     build(p) {
       const legStock   = 'reglar45x70';   // sturdier legs for a table
       const apronStock = 'reglar45x70';   // deep aprons, real rigidity
-      const plankStock = 'reglar45x95';   // wide top boards, laid flat
-      const battenStock= 'reglar45x45';   // breadboard battens under the top
+      const plankStock = 'reglar45x95';   // wide top boards, laid FLAT (wide face up)
+      const bearerStock= 'reglar45x70';   // cross-bearers under the flat top
 
       const plankSec = SEC(plankStock);   // {w:45, h:95}
-      const plankThick = plankSec.w;      // 45 tall laid flat
-      const plankWide  = plankSec.h;      // 95 across
-      const battenSec  = SEC(battenStock);
+      // Top planks lie FLAT via plank(): the WIDE section dim (95) runs across the
+      // top, the NARROW dim (45) is the board thickness (vertical). This is a real
+      // eating surface, not a row of on-edge fins.
+      const plankThick = Math.min(plankSec.w, plankSec.h); // 45 — vertical thickness
+      const plankWide  = Math.max(plankSec.w, plankSec.h); // 95 — across the top
+      const bearerSec  = SEC(bearerStock);
 
-      // Top sits on the base; the base must top out one plank-thickness down so
-      // the finished surface lands at p.topH.
-      const baseH = p.topH - plankThick;
+      // Top SURFACE must land at p.topH. Flat planks are only 45 thick (vs 70
+      // on-edge before), so the planks' underside sits one (thinner) plank-thickness
+      // down. frameBase puts its apron TOP at (h - 10), NOT at h, so to land the
+      // plank underside exactly on the apron top we pass h = apronTopY + 10 — this
+      // seats the top on the base instead of floating it 10mm clear.
+      const apronTopY = p.topH - plankThick;          // underside-of-planks plane (685)
+      const baseH = apronTopY + 10;                   // frameBase's apronTop = h - 10
 
       const parts = [];
       const joints = [];
@@ -317,40 +326,54 @@ export const MARI = [
       parts.push(...base.parts);
       joints.push(...base.joints);
 
-      // --- Top: plank field running the length (z), spread across width (x) -
+      // --- CROSS-BEARERS: full-width bearers (run along x) at apron-top level so
+      // every flat plank rests on a bearer along its length. Flat planks are far
+      // less stiff on-edge than before, so we add enough bearers that no plank
+      // free-spans more than panelSupportSpacing reasoning allows (~600mm). beam()
+      // laid along x renders section.w (=45) on the vertical axis, so seat the
+      // bearer top flush with the apron top using that real height.
+      const bearerVert = bearerSec.w;                  // 45 — vertical dim of a flat x-beam
+      const bearerY = apronTopY - bearerVert / 2;      // centre, top flush with apron top
+      const endInset = SEC(apronStock).w + 20;         // clear the short-end aprons
+      const innerLen = p.len - 2 * endInset;           // span between end bearers
+      const nBearers = Math.max(2, Math.ceil(innerLen / 600) + 1);
+      for (let i = 0; i < nBearers; i++) {
+        const z = innerLen / -2 + (nBearers > 1 ? (innerLen * i) / (nBearers - 1) : 0);
+        parts.push(beam(`BEARER-${i + 1}`, `Cross-bearer ${i + 1}`, bearerStock,
+          p.width, 'x', { x: 0, y: bearerY, z: Math.round(z) }, 'Bearers'));
+      }
+      joints.push(buttJoint(apronStock, nBearers * 4,
+        `${nBearers} cross-bearers, 2 screws into each long side apron`));
+
+      // --- Top: FLAT plank field running the length (z), spread across width (x).
+      // plank() lays each board wide-face-up; slatField self-spaces them to the gap.
       const field = slatField(p.width, plankWide, p.gap);
-      const plankY = p.topH - plankThick / 2;
+      const plankY = p.topH - plankThick / 2;          // bottom of planks == apron top
       field.positions.forEach((x, i) => {
-        parts.push(beam(`TOP-${i + 1}`, 'Top plank', plankStock, p.len, 'z',
+        parts.push(plank(`TOP-${i + 1}`, 'Top plank', plankStock, p.len, 'z',
           { x: Math.round(x), y: plankY, z: 0 }, 'Top'));
       });
-      // planks screwed down into the front + back aprons
-      joints.push(panelEdgeJoint('ply18', field.count * 2 * 50, 50,
-        `${field.count} planks, 1 screw into each of the 2 long aprons`));
+      // each plank screwed down into every cross-bearer it crosses.
+      joints.push(faceJoint(plankThick, field.count * nBearers,
+        `${field.count} planks, 1 screw into each of the ${nBearers} cross-bearers`));
 
-      // --- Breadboard battens under the top, near each end, tying the planks
-      const battenY = p.topH - plankThick - battenSec.h / 2;
-      const battenZ = p.len / 2 - 120;
-      for (const s of [-1, 1]) {
-        const tag = s < 0 ? 'A' : 'B';
-        parts.push(beam(`BAT-${tag}`, 'Underside batten', battenStock, p.width - 80, 'x',
-          { x: 0, y: battenY, z: s * battenZ }, 'Top'));
-        joints.push(faceJoint(plankThick, field.count,
-          `batten ${tag} up into every plank, 1 screw each`));
-      }
+      const supportEvery = panelSupportSpacing(plankThick); // sanity figure for the note
 
       const steps = [
-        `Cut list: 4 legs, 4 aprons (2 long, 2 short), ${field.count} top planks, 2 underside battens.`,
+        `Cut list: 4 legs, 4 aprons (2 long, 2 short), ${nBearers} cross-bearers, ${field.count} top planks.`,
         'Build the base: stand the four legs and screw the two long aprons then the two short aprons between them just under the top — 2 Torx per apron end (8 joints). Check it is square and does not rack.',
-        'Lay the top planks upside down on a flat floor with the chosen gap, starting from the centre so the gaps stay even, and screw the two battens up across them near each end to lock the top into one slab.',
-        'Flip the base onto the inverted top, centre it, then screw down through the long aprons up into the planks all along both sides.',
+        `Fit the ${nBearers} full-width cross-bearers between the two long aprons, their TOP edge flush with the apron top, evenly along the length — these carry the flat planks so none sags.`,
+        `Lay the ${field.count} top planks FLAT (wide face up) across the bearers with the ${p.gap}mm gaps, starting from the centre so the gaps stay even — a proper flat eating surface, not on-edge fins.`,
+        'Screw each plank straight down into every cross-bearer it crosses. The top is located on the base; lift it off for flat transport.',
         'Turn the whole table over, stand it, and check every leg meets the floor; pack or trim any short leg.',
       ];
       const notes = [
         'frameBase() handles the leg + apron geometry and its own screw schedule, so the base is consistent with the rest of the catalog instead of hand-built.',
-        `Top is ${p.topH} mm — dining height — and the deep ${apronStock} aprons sit high enough to clear the Mari Panca bench sliding underneath; build the table and bench to the same length so they pair.`,
-        'The two underside battens are the breadboard ends: they tie the loose planks into one slab and fight cupping without showing a single screw on the top face.',
-        'Outdoor tip: the open plank gaps drain rain and let wind through so the table is not a sail; round the top edges so a gust-blown plate slides rather than catches, and the end-grain takes oil better when softened.',
+        `Top planks lie FLAT (wide ${plankWide}mm face up, ${plankThick}mm thick) for a real eating surface — boards on-edge would give narrow fins with deep slots, no good for a table.`,
+        `Because flat planks are less stiff than on-edge, ${nBearers} full-width cross-bearers carry the field so no plank free-spans more than ~600mm (well inside the ~${supportEvery}mm guide for ${plankThick}mm); every plank rests on bearers — nothing floats.`,
+        `Top is ${p.topH} mm — dining height — kept exactly there by dropping the base to ${baseH} mm under the thinner flat planks; the deep ${apronStock} aprons still clear the Mari Panca bench underneath.`,
+        'Knock-down: the plank top lifts straight off the base for flat transport; the base breaks down at the apron screws.',
+        'Outdoor tip: the open plank gaps drain rain and let wind through so the table is not a sail; round the top edges so a gust-blown plate slides rather than catches.',
       ];
 
       return { parts, joints, steps, notes };

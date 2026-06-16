@@ -113,6 +113,38 @@ export function beam(ref, name, stockKey, length, axis, pos, group) {
   };
 }
 
+/**
+ * A timber member laid FLAT (wide face up) instead of on-edge — for a visible
+ * TABLE TOP where boards should lie flat, not stand as narrow fins.
+ *
+ * beam()/sizeAlong() always put the LARGER section dim on the vertical axis of a
+ * horizontal member (on-edge: stiff, correct for hidden joists/bearers). plank()
+ * does the opposite for the visible top surface: it orients the member so the
+ * WIDE section dim runs horizontally (across the top) and the NARROW section dim
+ * is vertical (the board's thickness). We achieve this by feeding the section
+ * dims to sizeAlong() in swapped order (wide first, narrow second) so the narrow
+ * dim lands on the member's vertical axis.
+ *
+ * Use for table tops only; keep beam() (on-edge) for joists, bearers, aprons.
+ */
+export function plank(ref, name, stockKey, length, axis, pos, group) {
+  const t = TIMBER[stockKey] || { section: { w: 45, h: 45 } };
+  const { w: sw, h: sh } = t.section;
+  const wide = Math.max(sw, sh);   // across the top (horizontal)
+  const narrow = Math.min(sw, sh); // the board's thickness (vertical, y)
+  // Build the cut size directly so the NARROW dim is always on the vertical (y)
+  // axis (flat) and the WIDE dim runs across the top, whatever horizontal axis
+  // the plank's length follows. (beam() would put `wide` on y => on-edge.)
+  let size;
+  if (axis === 'x') size = { w: length, h: narrow, d: wide };       // length x, flat
+  else if (axis === 'z') size = { w: wide, h: narrow, d: length };  // length z, flat
+  else size = { w: wide, h: length, d: narrow };                    // vertical plank (rare)
+  return {
+    ref, name, material: 'timber', stock: stockKey,
+    size, pos: { ...pos }, rot: { x: 0, y: 0, z: 0 }, group,
+  };
+}
+
 /** A vertical leg (length along y). */
 export function leg(ref, stockKey, height, pos, group) {
   return beam(ref, 'Leg', stockKey, height, 'y', pos, group);
