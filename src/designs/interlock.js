@@ -24,12 +24,13 @@
 //
 // GEOMETRY OF THE PINWHEEL (why it interlocks)
 //   half      = size/2                     (seat edge from centre)
-//   legW      = 45                          (reglar45x45 leg)
-//   For a leg protruding past the +z edge by `overhang`, its OUTER face sits at
-//   half+overhang, so its centre z = half + overhang - legW/2. Along that same
-//   edge it is shifted toward one corner by `slide` so the four legs read as a
-//   pinwheel (each near a corner, each poking past a different edge). The base
-//   leg vector is then rotated 0/90/180/270° about centre to place all four.
+//   Legs are chunky reglar45x70 posts at the four corners (45×70 in plan), set
+//   so their outer faces sit flush at the seat edge — the stool reads solid.
+//   The pinwheel comes from the FEET below: each is a reglar45x95 laid FLAT
+//   (95mm wide, 45mm thick) so every protruding tab is a substantial beam, not
+//   a thin stick. A foot runs OUTWARD past one edge so its outer end is at
+//   half+overhang; going round the corners each foot pokes past the NEXT edge.
+//   The base foot vector is rotated 0/90/180/270° about centre to place all four.
 //
 //   The seat itself is the same square at every unit, so the under-seat rails
 //   tie the four legs into a rigid stool (rails kept INSIDE the seat footprint).
@@ -44,7 +45,7 @@
 // ============================================================================
 
 import {
-  ERGO, beam, leg, panel,
+  ERGO, beam, plank, leg, panel,
   buttJoint, faceJoint, panelEdgeJoint,
   SHEETS, TIMBER,
 } from '../engineering.js';
@@ -91,11 +92,13 @@ export const INTERLOCK = [
     ],
 
     build(p) {
-      const legStock  = 'reglar45x45';   // square pinwheel legs
+      const legStock  = 'reglar45x70';   // chunky corner legs (45×70 in plan)
       const railStock = 'reglar34x45';   // light braces under the seat
       const seatStock = 'ply18';         // the single sheet part per unit
 
-      const legW   = SEC(legStock).w;    // 45
+      const legSecA = SEC(legStock).w;   // 45 (narrow plan dim, local-x)
+      const legSecB = SEC(legStock).h;   // 70 (wide plan dim, local-z)
+      const legMax  = Math.max(legSecA, legSecB); // 70 — outer footprint half
       const railH  = SEC(railStock).h;   // 45 (rail on edge)
       const seatT  = PLY(seatStock);     // 18
 
@@ -109,11 +112,11 @@ export const INTERLOCK = [
       // A unit's plan is built in its LOCAL frame (centre 0,0, no yaw), and a
       // helper maps each local (x,z) into the world via the unit's yaw + offset,
       // so a 90°-rotated twin is just yaw=1 (×90°). Returns parts/joints plus
-      // legCentres and tabBoxes (plan footprints) for the interlock guard.
+      // legBoxes and tabBoxes (plan footprints) for the interlock guard.
       function unit(tag, dx, dz, yaw) {
         const parts = [];
         const joints = [];
-        const legCentres = [];
+        const legBoxes = [];                  // {x,z,hw,hd} plan AABBs of the legs
         const tabBoxes = [];                  // {x,z,hw,hd} plan AABBs of the feet
 
         // world placement of a local plan point + which world axis a local-x
@@ -122,18 +125,23 @@ export const INTERLOCK = [
           const [rx, rz] = rot90(lx, lz, yaw / 90);
           return [rx + dx, rz + dz];
         };
-        const localXAxis = (yaw % 180 === 0) ? 'x' : 'z';   // local-x runs world-?
-        const localZAxis = (yaw % 180 === 0) ? 'z' : 'x';   // local-z runs world-?
+        const yawEven = (yaw % 180 === 0);
+        const localXAxis = yawEven ? 'x' : 'z';   // local-x runs world-?
+        const localZAxis = yawEven ? 'z' : 'x';   // local-z runs world-?
+        // a leg's LOCAL plan footprint is legSecA (x) × legSecB (z); a 90° yaw
+        // swaps which world axis each lands on, so the world AABB half-extents are:
+        const legHwX = (yawEven ? legSecA : legSecB) / 2;
+        const legHwZ = (yawEven ? legSecB : legSecA) / 2;
 
-        // LEGS — four posts INSET under the seat near the corners, so each leg
-        // sits fully under the ply and carries it (a sound stool). Symmetric
-        // corners; the pinwheel comes from the FEET below, not the legs.
-        const legOff = half - legW / 2 - 18;                // leg centre from axis
+        // LEGS — four chunky posts at the corners, set so their OUTER faces sit
+        // flush at the seat edge: each carries the ply and reads solid. Symmetric
+        // corners; the pinwheel comes from the wide FEET below, not the legs.
+        const legOff = half - legMax / 2;                   // leg centre from axis
         for (let k = 0; k < 4; k++) {
           const sx = (k === 0 || k === 3) ? 1 : -1;
           const sz = (k === 0 || k === 1) ? 1 : -1;
           const [wx, wz] = place(sx * legOff, sz * legOff);
-          legCentres.push([wx, wz]);
+          legBoxes.push({ x: wx, z: wz, hw: legHwX, hd: legHwZ });
           parts.push(leg(`${tag}-LEG-${k + 1}`, legStock, legTop,
             { x: wx, y: legY, z: wz }, `${tag} legs`));
         }
@@ -146,11 +154,14 @@ export const INTERLOCK = [
         // so a rotated neighbour's foot drops into this unit's notch with the
         // seats overlapping cleanly above. Base foot (k=0): from the +x,+z corner,
         // running +z past the +z edge. rot90(k) places the other three.
-        const footStock = 'reglar45x45';
-        const footH = SEC(footStock).h;                    // 45
-        const footY = footH / 2;                           // rests on ground
-        // foot runs in local +z from the corner leg out to half+overhang.
-        const footInner = legOff - legW / 2;               // overlaps the leg
+        const footStock = 'reglar45x95';
+        const footSec   = SEC(footStock);                  // {w:45, h:95}
+        const footThk   = Math.min(footSec.w, footSec.h);  // 45 — vertical thickness (flat)
+        const footWide  = Math.max(footSec.w, footSec.h);  // 95 — the tab's width in plan
+        const footY = footThk / 2;                         // laid FLAT, rests on ground
+        // foot runs in local +z from the corner leg out to half+overhang. Laid
+        // flat via plank() so the WIDE (95mm) face is horizontal — a chunky tab.
+        const footInner = legOff - legMax / 2;             // overlaps the leg
         const footOuter = half + p.overhang;               // past the edge
         const footLen   = footOuter - footInner;           // length of the foot
         const footCz    = (footInner + footOuter) / 2;     // centre z (local)
@@ -161,11 +172,12 @@ export const INTERLOCK = [
           // the foot's LENGTH runs along local-z rotated by k, then by yaw.
           // total rotation steps for the length axis = (k + yaw/90).
           const lenAxis = (((k + yaw / 90) % 2) === 0) ? 'z' : 'x';
-          parts.push(beam(`${tag}-FOOT-${k + 1}`, 'Pinwheel foot', footStock,
+          parts.push(plank(`${tag}-FOOT-${k + 1}`, 'Pinwheel foot', footStock,
             footLen, lenAxis, { x: wx, y: footY, z: wz }, `${tag} feet`));
-          // plan AABB of this foot (for the no-collision guard).
-          const hw = lenAxis === 'x' ? footLen / 2 : footH / 2;
-          const hd = lenAxis === 'z' ? footLen / 2 : footH / 2;
+          // plan AABB of this foot (for the no-collision guard): length on the
+          // run axis, the wide (95mm) face across it.
+          const hw = lenAxis === 'x' ? footLen / 2 : footWide / 2;
+          const hd = lenAxis === 'z' ? footLen / 2 : footWide / 2;
           tabBoxes.push({ x: wx, z: wz, hw, hd });
           joints.push(buttJoint(footStock, 3, 'pinwheel foot lapped + screwed up into its corner leg'));
         }
@@ -200,7 +212,7 @@ export const INTERLOCK = [
         joints.push(faceJoint(seatT, 4, 'seat down into all four legs'));
         joints.push(panelEdgeJoint(seatStock, 4 * p.size, 220, 'seat perimeter screwed to the rail frame'));
 
-        return { parts, joints, legCentres, tabBoxes };
+        return { parts, joints, legBoxes, tabBoxes };
       }
 
       const parts = [];
@@ -222,10 +234,12 @@ export const INTERLOCK = [
         //
         // `overlap` is held in the geometry's collision-free band (the inner
         // corner legs must not meet and the protruding feet must land in notches,
-        // not on the neighbour's legs). A swept proof over the whole param range
-        // shows any overlap in ~[125,180] is safe for every size/overhang, so a
-        // fixed 140mm overlap (a clean ~one-leg-row merge) always interlocks.
-        const overlap = 140;                   // tops overlap on the join (mm)
+        // not on the neighbour's legs). Widening the tabs to 95mm widened the
+        // members, so the notches (and thus the required overlap) widened to
+        // match: a swept proof over the whole param range now shows any overlap
+        // in ~[152,191] is safe for every size/overhang. A fixed 170mm overlap
+        // sits mid-band, so the rotate-and-slot always interlocks.
+        const overlap = 170;                   // tops overlap on the join (mm)
         const pitch   = p.size - overlap;      // single-axis offset between centres
         const u1 = unit('U1', -pitch / 2, 0, 0);
         const u2 = unit('U2',  pitch / 2, 0, 90);
@@ -240,10 +254,7 @@ export const INTERLOCK = [
         // is the geometric proof the tabs land in the notches — a pure,
         // deterministic guard so a bad pitch/overhang can't ship.
         const tol = 1; // mm — allow faces to abut without counting as overlap
-        const boxesOf = (u) => [
-          ...u.legCentres.map(([x, z]) => ({ x, z, hw: legW / 2, hd: legW / 2 })),
-          ...u.tabBoxes,
-        ];
+        const boxesOf = (u) => [...u.legBoxes, ...u.tabBoxes];
         const b1 = boxesOf(u1), b2 = boxesOf(u2);
         for (const a of b1) for (const b of b2) {
           const ox = Math.abs(a.x - b.x) < a.hw + b.hw - tol;
@@ -258,17 +269,17 @@ export const INTERLOCK = [
       }
 
       const steps = [
-        'Cut per stool: 4 legs (reglar45x45), 4 pinwheel feet (reglar45x45), 2 x-rails + 2 z-rails (reglar34x45), and 1 square ply seat.',
-        'Stand the four legs at the seat corners (inset under the ply) and tie them with the two x-rails then the two z-rails (dropped one rail-height) to make a rigid box just under the seat.',
-        'Screw a foot to the bottom of each leg so it runs OUTWARD past one edge by ~80mm — and arrange them PINWHEEL: going round the four corners, each foot pokes past the NEXT edge (4-fold rotation). The footprint now has four tabs and four matching notches.',
+        'Cut per stool: 4 chunky legs (reglar45x70), 4 wide pinwheel feet (reglar45x95, laid flat), 2 x-rails + 2 z-rails (reglar34x45), and 1 square ply seat.',
+        'Stand the four legs at the seat corners (outer faces flush to the ply edge) and tie them with the two x-rails then the two z-rails (dropped one rail-height) to make a rigid box just under the seat.',
+        'Screw a foot to the bottom of each leg, laid FLAT (95mm wide face down) so each tab reads as a substantial beam — running OUTWARD past one edge by ~80mm, arranged PINWHEEL: going round the four corners, each foot pokes past the NEXT edge (4-fold rotation). The footprint now has four wide tabs and four matching notches.',
         'Drop the ply seat on and screw down into each leg top; the feet sit on the ground, well below the seat.',
-        'To INTERLOCK two into a bench: build a second identical stool, rotate it 90° about the vertical, and slide it along ONE edge so its protruding feet drop into the first stool\'s notches and the two seats overlap by ~140mm on the join — one wider seat, tabs in notches.',
+        'To INTERLOCK two into a bench: build a second identical stool, rotate it 90° about the vertical, and slide it along ONE edge so its protruding feet drop into the first stool\'s notches and the two seats overlap by ~170mm on the join — one wider seat, tabs in notches.',
         'Repeat the rotate-and-slot to tessellate a whole cluster or run of bench from identical pinwheel units.',
       ];
       const notes = [
         'The pinwheel is the whole trick: each unit has four feet, each poking past a different edge (4-fold rotational symmetry), so an identical unit rotated 90° has its tabs exactly where this one has notches. Rotate-and-slot, not push-together.',
-        'Interlock geometry: the twin is yawed 90° and slid ' + (p.size - 140) + 'mm along one edge, so the tops fully coincide on one axis and overlap 140mm on the join — a ' + (2 * p.size - 140) + 'mm-wide bench from two ' + p.size + 'mm stools. The feet sit at ground level and the seats up at ' + p.seatH + 'mm, so a neighbour\'s foot passes cleanly under this seat; build-time check confirms no two units\' legs or feet share plan space.',
-        'The overlap is held in the collision-free band (a swept proof over the whole size/overhang range shows ~125–180mm always interlocks), so the rotate-and-slot works at any parameter setting — a single unit is a comfortable stool, two make a small bench, a field tessellates into communal seating with no extra parts.',
+        'Interlock geometry: the twin is yawed 90° and slid ' + (p.size - 170) + 'mm along one edge, so the tops fully coincide on one axis and overlap 170mm on the join — a ' + (2 * p.size - 170) + 'mm-wide bench from two ' + p.size + 'mm stools. The feet sit at ground level and the seats up at ' + p.seatH + 'mm, so a neighbour\'s foot passes cleanly under this seat; build-time check confirms no two units\' legs or feet share plan space.',
+        'The overlap is held in the collision-free band (a swept proof over the whole size/overhang range shows ~152–191mm always interlocks with the wider 95mm tabs), so the rotate-and-slot works at any parameter setting — a single unit is a comfortable stool, two make a small bench, a field tessellates into communal seating with no extra parts.',
         'Outdoors: a lone lightweight pinwheel stool can skitter in wind — interlocked units brace each other through the slotted feet, but for a standalone unit on a deck, weight the seat or add a discreet ground anchor (a screw eye + peg) through one foot into the decking.',
       ];
 
