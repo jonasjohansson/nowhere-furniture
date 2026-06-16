@@ -31,7 +31,7 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=19';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=20';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities
@@ -918,13 +918,17 @@ export function buildExplodedSVG(parts, opts = {}) {
   const body = [];
   let y = MARGIN;
 
-  // Title
-  body.push(`<text x="${MARGIN}" y="${y + 6}" font-size="22" font-weight="bold" fill="#1a1a1a">${xesc(title)}</text>`);
-  const totalParts = parts.length, kinds = pieces.length;
-  body.push(`<text x="${PAGE_W - MARGIN}" y="${y + 6}" font-size="13" fill="#666" text-anchor="end">${kinds} distinct pieces · ${totalParts} parts total · mm</text>`);
-  y += 34;
-  body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#1a1a1a" stroke-width="1.5"/>`);
-  y += 22;
+  // Title (skipped when the host document provides its own header).
+  if (!opts.omitTitle) {
+    body.push(`<text x="${MARGIN}" y="${y + 6}" font-size="22" font-weight="bold" fill="#1a1a1a">${xesc(title)}</text>`);
+    const totalParts = parts.length, kinds = pieces.length;
+    body.push(`<text x="${PAGE_W - MARGIN}" y="${y + 6}" font-size="13" fill="#666" text-anchor="end">${kinds} distinct pieces · ${totalParts} parts total · mm</text>`);
+    y += 34;
+    body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#1a1a1a" stroke-width="1.5"/>`);
+    y += 22;
+  } else {
+    y += 6;
+  }
 
   // --- isometric exploded view (one unit) -----------------------------------
   body.push(`<text x="${MARGIN}" y="${y}" font-size="15" font-weight="bold" fill="#2b5d8a">Exploded view${parts.some((p) => /^U\d+-/.test(p.ref || '')) ? ' (one unit)' : ''}</text>`);
@@ -967,7 +971,7 @@ export function buildExplodedSVG(parts, opts = {}) {
   y += rowH + 40;
 
   // --- assembly steps -------------------------------------------------------
-  const steps = arr(opts.steps);
+  const steps = opts.omitSteps ? [] : arr(opts.steps);
   if (steps.length) {
     body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#d8d8d8" stroke-width="1"/>`);
     y += 26;
@@ -1008,8 +1012,9 @@ export function buildFullDocHTML(bom, meta = {}) {
   const designer = meta.designer || '';
   const parts = arr(meta.parts);
 
-  // The exploded/pieces/steps drawing, embedded inline (responsive via CSS).
-  const explodedSVG = buildExplodedSVG(parts, { steps: meta.steps, name });
+  // Exploded + dimensioned pieces drawing (the doc supplies its own title/header
+  // and renders the steps as readable HTML below, so omit both from the SVG).
+  const explodedSVG = buildExplodedSVG(parts, { name, omitTitle: true, omitSteps: true });
 
   // Cut-sheet nesting: the BOM's sheet items carry no draw coordinates, so feed
   // the cut-sheet packer the sheet PARTS directly (broad face w×h) and let it
@@ -1076,6 +1081,10 @@ export function buildFullDocHTML(bom, meta = {}) {
   const grand = totals.grandCost != null ? totals.grandCost
     : (totals.sheetCost || 0) + (totals.timberCost || 0) + (totals.screwCost || 0);
 
+  // Steps + notes as readable HTML (their own page), not baked into the drawing.
+  const stepsHTML = arr(meta.steps).map((s) => `<li>${esc(s)}</li>`).join('');
+  const notesHTML = arr(meta.notes).map((n) => `<li>${esc(n)}</li>`).join('');
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1092,9 +1101,15 @@ export function buildFullDocHTML(bom, meta = {}) {
   header.doc h1 { font-size: 22px; margin: 0; }
   header.doc .meta { color: #666; font-size: 12px; text-align: right; }
   section { margin: 20px 0; page-break-inside: avoid; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #2b5d8a;
-    border-bottom: 1px solid #d8d8d8; padding-bottom: 4px; margin: 0 0 10px; }
-  .figure svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  section.brk { break-before: page; page-break-before: always; }
+  section.figure { page-break-inside: auto; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: #2b5d8a;
+    border-bottom: 1px solid #d8d8d8; padding-bottom: 4px; margin: 0 0 12px; }
+  .figure svg { width: 100%; height: auto; display: block; margin: 0 auto; }
+  ol.steps { font-size: 15px; line-height: 1.6; padding-left: 26px; margin: 0; }
+  ol.steps li { margin-bottom: 12px; }
+  ul.notes { font-size: 13px; line-height: 1.55; color: #444; padding-left: 22px; margin: 10px 0 0; }
+  ul.notes li { margin-bottom: 8px; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #e2e2e2; vertical-align: top; }
   thead th { background: #f6f7f9; font-weight: 600; }
@@ -1118,11 +1133,20 @@ export function buildFullDocHTML(bom, meta = {}) {
     <div class="meta">Build sheet${designer ? `<br>Design: ${esc(designer)}` : ''}${date ? `<br>${esc(date)}` : ''}</div>
   </header>
 
-  <section class="figure">${explodedSVG}</section>
+  <section class="figure">
+    <h2>Exploded view &amp; pieces</h2>
+    ${explodedSVG}
+  </section>
 
-  <section class="figure"><h2>Cut sheets — plywood nesting</h2>${cutSVG}</section>
+  <section class="brk">
+    <h2>Assembly steps</h2>
+    <ol class="steps">${stepsHTML || '<li style="color:#999">No steps.</li>'}</ol>
+    ${notesHTML ? `<h2 style="margin-top:22px">Engineering notes</h2><ul class="notes">${notesHTML}</ul>` : ''}
+  </section>
 
-  <section>
+  <section class="figure brk"><h2>Cut sheets — plywood nesting</h2>${cutSVG}</section>
+
+  <section class="brk">
     <h2>Shopping list — sheet goods</h2>
     <table><thead><tr><th>Material</th><th class="num">Sheets</th><th>Sheet size</th><th class="num">Cost</th></tr></thead>
       <tbody>${sheetRows || `<tr><td colspan="4" style="color:#999">No plywood needed.</td></tr>`}</tbody></table>

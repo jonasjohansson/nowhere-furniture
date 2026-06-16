@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=19';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=19';
-import { computeBOM, bomSummaryLine } from './bom.js?v=19';
-import { SHEETS, TIMBER } from './stock.js?v=19';
-import { MATERIALS } from './materials.js?v=19';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=19';
+import { Builder } from './builder.js?v=20';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=20';
+import { computeBOM, bomSummaryLine } from './bom.js?v=20';
+import { SHEETS, TIMBER } from './stock.js?v=20';
+import { MATERIALS } from './materials.js?v=20';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=20';
 import {
   buildFullDocHTML,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=19';
+} from './export.js?v=20';
 
 const $ = (id) => document.getElementById(id);
 
@@ -376,7 +376,7 @@ $('right').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-exp]'); if (!btn) return;
   const bom = currentBOM();
   switch (btn.dataset.exp) {
-    case 'pdf':  printHTML(buildFullDocHTML(bom, { ...exportMeta(), name: currentDesign?.name, steps: currentBuild?.steps })); break;
+    case 'pdf':  printHTML(buildFullDocHTML(bom, { ...exportMeta(), name: currentDesign?.name, steps: currentBuild?.steps, notes: currentBuild?.notes })); break;
     case 'save': exportProjectJSON({ design: currentDesign?.id, params: currentParams, parts: lastParts }, 'nowhere-project.json'); break;
     case 'load': $('file-input').click(); break;
   }
