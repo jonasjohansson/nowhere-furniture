@@ -21,7 +21,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; font-family: var(--font)
 #left { width: 246px; border-right: 1px solid var(--line); }
 #right { width: 326px; border-left: 1px solid var(--line); }
 #stage { flex: 1; position: relative; min-width: 0; background: var(--bg); }
-#canvas { position: absolute; inset: 0; }
+#canvas { position: absolute; inset: 0; overflow: hidden; }
+/* The renderer sizes the drawing-buffer (w×devicePixelRatio) but skips CSS size,
+   so force the <canvas> to fill its container — otherwise on a retina display it
+   shows at 2× and overflows the layout. */
+#canvas canvas { display: block; width: 100% !important; height: 100% !important; }
 
 /* sections */
 .section { padding: 14px; border-bottom: 1px solid var(--line); }

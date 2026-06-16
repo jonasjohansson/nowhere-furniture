@@ -16,7 +16,6 @@ const $ = (id) => document.getElementById(id);
 // state
 // ---------------------------------------------------------------------------
 const builder = new Builder($('canvas'));
-window.__builder = builder; // dev hook for inspection
 let currentDesign = null;
 let currentParams = {};
 let currentJoints = [];   // joints from the active design template (drive screws)
