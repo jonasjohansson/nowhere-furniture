@@ -33,8 +33,11 @@ import { SHEETS, TIMBER } from './stock.js';
 // ----------------------------------------------------------------------------
 const TEX = 1024;               // base canvas resolution (square)
 const END_TEX = 512;            // end-grain canvas resolution (square)
-const GRAIN_PERIOD_MM = 320;    // world length (mm) covered by one albedo tile
-                                // along the grain -> sets long-grain density
+// The long-grain albedo spans the WHOLE board along its length (repeat = 1) so
+// the grain runs end-to-end with no repeating motif and no seam. The canvas is
+// built with full-length longitudinal striations + gentle low-frequency
+// waviness, so even stretched onto a very long board it still reads as natural
+// continuous grain. No GRAIN_PERIOD_MM tiling along the length anymore.
 const CROSS_PERIOD_MM = 150;    // world length (mm) across the board per tile
 const RING_PERIOD_MM = 7;       // growth-ring spacing target on end grain (mm)
 const NORMAL_STRENGTH = 0.55;   // low-moderate; grooves catch raking light
@@ -186,9 +189,11 @@ function timberHsl(baseColor) {
   dh -= Math.round(dh); // wrap to [-0.5, 0.5]
   const warmth = Math.max(0, 1 - Math.abs(dh) / 0.12); // 1 near amber -> 0 far
   hsl.h = amber + dh * 0.3 * warmth;
-  // Guarantee warmth + life: floor saturation, keep it light but not washed.
-  hsl.s = clamp(hsl.s * 0.6 + 0.32, 0.28, 0.6);
-  hsl.l = clamp(hsl.l * 0.85 + 0.18, 0.42, 0.7);
+  // Keep it a believable warm timber (golden pine / soft oak), NOT candy red.
+  // Saturation is held low: real planed softwood/oak sits around 0.18..0.34 in
+  // HSL, never neon. Lightness stays in a natural mid-warm band.
+  hsl.s = clamp(hsl.s * 0.45 + 0.16, 0.16, 0.34);
+  hsl.l = clamp(hsl.l * 0.85 + 0.20, 0.46, 0.72);
   return hsl;
 }
 
@@ -238,12 +243,15 @@ function buildLongGrainCanvases(tintHex, seed) {
   const r = mulberry32(seed);
   // Per-board variation: hue/value shift, ring phase + frequency, grain offset.
   const hueShift = (r() - 0.5) * 0.02;
-  const lightShift = (r() - 0.5) * 0.06;
+  const lightShift = (r() - 0.5) * 0.05;
   const ringPhase = r() * Math.PI * 2;
   const ringFreqJitter = 0.8 + r() * 0.5;     // 0.8..1.3 x nominal
-  const redden = 0.04 + r() * 0.05;           // latewood redder/darker amount
+  const redden = 0.015 + r() * 0.02;          // latewood subtle warm darkening
 
-  // FBM fields:
+  // FBM fields. The canvas U axis spans the WHOLE board length (repeat = 1), so
+  // U=0..1 is the full board: every feature is full-length and continuous, and
+  // nothing repeats down the length. We keep the U-frequencies LOW so a single
+  // tile stretched onto a long board still reads as gentle, natural grain.
   const grainWave = makeFbm1D(seed ^ 0x9e3779b9, 4); // gentle waviness of fibre
   const ringFbm = makeFbm1D(seed ^ 0x85ebca6b, 3);   // ring band irregularity
   const blotchFbm = makeFbm1D(seed ^ 0xc2b2ae35, 2); // large-scale blotch (V)
@@ -255,47 +263,53 @@ function buildLongGrainCanvases(tintHex, seed) {
   // Fine striation frequency along V (each board-cross unit has many fibres).
   const striationFreq = 70 + Math.floor(r() * 60);
 
-  // Knots: 0..2, placed deterministically.
+  // Knots are RARE on a planed board face: at most ONE, and only ~30% of boards.
+  // Placed mid-board so it never sits on a tile seam (there is no seam now, but
+  // keeping it central also avoids it reading as an edge feature).
   const knots = [];
-  const nKnots = r() < 0.55 ? (r() < 0.5 ? 1 : 2) : 0;
-  for (let k = 0; k < nKnots; k++) {
+  if (r() < 0.3) {
     knots.push({
-      cx: 0.1 + r() * 0.8,
-      cy: 0.12 + r() * 0.76,
-      rad: 0.018 + r() * 0.03,
-      ramp: 0.05 + r() * 0.05,    // halo of swept grain around it
-      dark: 0.28 + r() * 0.18,    // how dark the core is
+      cx: 0.3 + r() * 0.4,        // central third of the length
+      cy: 0.2 + r() * 0.6,
+      rad: 0.012 + r() * 0.02,
+      ramp: 0.04 + r() * 0.04,    // halo of swept grain around it
+      dark: 0.22 + r() * 0.12,    // how dark the core is
     });
   }
 
-  // Cathedral arch (flat-sawn) presence: 0..1 arches across the board.
-  const hasArch = r() < 0.6;
+  // No repeating cathedral arch. At most ONE very broad, low-frequency sweep of
+  // the grain along the full board length (≤1 cycle over the whole board) so it
+  // reads as a single gentle figure, not a motif that repeats every tile.
+  const hasArch = r() < 0.5;
   const archCenterV = 0.2 + r() * 0.6;
-  const archAmp = 0.12 + r() * 0.14;
-  const archFreq = 1 + r() * 1.5;
+  const archAmp = 0.05 + r() * 0.05;          // low amplitude
+  const archCycles = 0.4 + r() * 0.6;         // <1 cycle across the whole board
+  const archPhase = r() * Math.PI * 2;
 
   for (let y = 0; y < H; y++) {
     const v = y / H;             // across board, 0..1
     // Blotch is mostly a function of V with a little U drift -> long soft cloud.
     for (let x = 0; x < W; x++) {
-      const u = x / W;           // along grain, 0..1
+      const u = x / W;           // along grain (full board length), 0..1
 
       // --- waviness: displace the V coordinate used for rings/striations so
-      // grain isn't ruler-straight. Low-freq sinusoid + FBM jitter along U.
+      // grain isn't ruler-straight. ONE gentle low-frequency sweep across the
+      // whole board + low-freq FBM jitter. Frequencies are deliberately low so
+      // the grain stays mostly-straight and continuous end-to-end.
       const wave =
-        Math.sin(u * Math.PI * 2 * 1.5 + ringPhase) * 0.012 +
-        grainWave(u * 3.0) * 0.03;
+        Math.sin(u * Math.PI * 2 * 0.5 + ringPhase) * 0.010 +
+        grainWave(u * 1.2) * 0.022;
       const vv = v + wave;
 
-      // --- cathedral arch: bends the ring coordinate near the board centre
-      // into nested U-shapes, the classic flat-sawn figure.
+      // --- single broad sweep (replaces the repeating cathedral arch): bends
+      // the ring coordinate near the board centre with <1 cycle over the length.
       let archBend = 0;
       if (hasArch) {
         const dz = (vv - archCenterV);
-        archBend = Math.cos(u * Math.PI * 2 * archFreq) * archAmp *
-                   Math.exp(-(dz * dz) / 0.04);
+        archBend = Math.cos(u * Math.PI * 2 * archCycles + archPhase) * archAmp *
+                   Math.exp(-(dz * dz) / 0.05);
       }
-      const ringCoord = (vv + archBend) * ringBands + ringFbm(u * 1.4) * 0.4;
+      const ringCoord = (vv + archBend) * ringBands + ringFbm(u * 0.7) * 0.35;
 
       // --- growth ring band: sharp-ish transition earlywood->latewood. Use a
       // skewed wave so latewood (dark band) is narrower than earlywood.
@@ -305,28 +319,31 @@ function buildLongGrainCanvases(tintHex, seed) {
       ring = Math.sign(ring) * Math.pow(Math.abs(ring), 0.6);
       const late = smoothstep(0.2, 0.95, ring); // 0 earlywood .. 1 latewood
 
-      // --- fine striations along the grain: many thin darker fibre lines.
-      const striY = vv * striationFreq + grainWave(u * 8.0) * 0.8;
+      // --- fine striations running the FULL length of the grain: many thin
+      // darker fibre lines, continuous end-to-end (function of V, with only a
+      // low-freq U jitter so they wander naturally without breaking up).
+      const striY = vv * striationFreq + grainWave(u * 3.0) * 0.8;
       const stri = Math.abs(Math.sin(striY * Math.PI));
-      const striMark = Math.pow(stri, 6) * 0.10; // dark thin lines
+      const striMark = Math.pow(stri, 6) * 0.09; // dark thin lines
 
       // --- pores: fine speckle, denser in latewood (open-grain look).
       const poreN = makeHashNoise(x, y, seed);
       const pore = (poreN > 0.93 ? (poreN - 0.93) / 0.07 : 0) * (0.4 + 0.6 * late);
-      const poreMark = pore * 0.10;
+      const poreMark = pore * 0.09;
 
       // --- large blotch: gentle lightness cloud.
-      const blotch = (blotchFbm(v * 2.2) * 0.5 + blotchFbmU(u * 1.3) * 0.5) * 0.05;
+      const blotch = (blotchFbm(v * 2.2) * 0.5 + blotchFbmU(u * 0.8) * 0.5) * 0.045;
 
       // --- assemble HSL for this texel from the anchor.
       let hh = anchor.h + hueShift;
       let ss = anchor.s;
       let ll = anchor.l + lightShift + blotch;
 
-      // Latewood: darker + redder (shift hue slightly toward red, drop L, +S).
-      ll -= late * 0.14;
-      ss += late * 0.10;
-      hh -= late * redden;       // toward red end of the warm band
+      // Latewood: darker + a touch warmer. Keep saturation gain SMALL so the
+      // dark bands stay believable golden/brown, never candy red.
+      ll -= late * 0.12;
+      ss += late * 0.05;
+      hh -= late * redden;       // a subtle warm shift, not a red jump
 
       // Striations + pores darken locally.
       ll -= striMark + poreMark;
@@ -343,8 +360,8 @@ function buildLongGrainCanvases(tintHex, seed) {
           // concentric darkening inside the knot
           const rings = 0.5 + 0.5 * Math.sin(dist / Math.max(kt.rad, 1e-4) * 18);
           ll -= core * kt.dark + halo * 0.05 * rings;
-          ss += core * 0.12;
-          hh -= core * 0.02;
+          ss += core * 0.06;
+          hh -= core * 0.015;
           knotHeight -= core * 0.6 + halo * 0.1;
         }
       }
@@ -394,7 +411,7 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
   const lightShift = (r() - 0.5) * 0.05;
   const ringPx = ringSpacingPx;                 // pixels per growth ring
   const ringFbm = makeFbm1D(seed ^ 0xa54ff53a, 3);
-  const redden = 0.05 + r() * 0.05;
+  const redden = 0.015 + r() * 0.02;
 
   // Faint radial ray fleck (medullary rays) emanating from the pith.
   const rayCount = 30 + Math.floor(r() * 30);
@@ -420,8 +437,8 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
       let hh = anchor.h + hueShift;
       let ss = anchor.s;
       let ll = anchor.l + lightShift + ray;
-      ll -= late * 0.16 + sp;
-      ss += late * 0.10;
+      ll -= late * 0.14 + sp;
+      ss += late * 0.05;
       hh -= late * redden;
 
       const rgb = hslToRgb(hh, ss, ll);
@@ -669,9 +686,13 @@ export function createWoodMaterial(THREE, opts) {
 
   const base = getBaseTextures(THREE, tint, seed);
 
-  // Repeats so density is constant in world space. Long axis -> grain density;
-  // the cross axis sets how many "boards-worth" of cross figure show.
-  const repAlong = (axisLenMM) => clamp(axisLenMM / GRAIN_PERIOD_MM, 0.25, 12);
+  // ALONG the grain we use a single continuous field that spans the WHOLE board
+  // (repeat = 1): the grain runs end-to-end with no repeating motif and no seam.
+  // A little stretch on very long boards is fine and natural — the canvas is
+  // built with full-length striations + gentle low-freq waviness so it holds up.
+  const repAlong = () => 1;
+  // ACROSS the board we still tile by world width (V axis is unconstrained — the
+  // visible-tiling bug was only ever along the length).
   const repAcross = (axisLenMM) => clamp(axisLenMM / CROSS_PERIOD_MM, 0.25, 12);
 
   // For BoxGeometry, each face's local UV: U follows the face's first in-plane
@@ -700,7 +721,11 @@ export function createWoodMaterial(THREE, opts) {
     else { rot = Math.PI / 2; alongAxis = a1; acrossAxis = a0; }
     const repU = repAlong(dimOf[alongAxis]);
     const repV = repAcross(dimOf[acrossAxis]);
-    return { rot, repU, repV, offU, offV, tint: tintColor, environment: o.environment };
+    // U offset MUST be 0 along the grain: repU is 1 and the canvas is not
+    // tileable on U, so any non-zero U offset would wrap and produce a visible
+    // seam mid-board. The single continuous field is shown start-to-end. Board
+    // variation comes from the V offset + per-board material.color tint instead.
+    return { rot, repU, repV, offU: 0, offV, tint: tintColor, environment: o.environment };
   }
 
   // End-grain face: square-ish ring texture, repeats from the two cross dims.
@@ -733,7 +758,7 @@ export function createWoodMaterial(THREE, opts) {
       rot: 0,
       repU: repAlong(lenMM),
       repV: repAcross(Math.min(w, h, d)),
-      offU, offV, tint: tintColor, environment: o.environment,
+      offU: 0, offV, tint: tintColor, environment: o.environment,
     });
   }
 }
