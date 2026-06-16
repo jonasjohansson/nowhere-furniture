@@ -150,11 +150,12 @@ export class Builder {
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       const rt = this._pmrem.fromEquirectangular(hdr);
       this.scene.environment = rt.texture;        // reflections + IBL on the wood
-      this.scene.background = hdr;                 // the desert sky itself
-      this.scene.backgroundBlurriness = 0.5;      // soft, keeps furniture the subject
-      this.scene.backgroundIntensity = 1.05;
+      this.scene.environmentIntensity = 0.9;
+      // NB: we DON'T set scene.background to the HDRI — the warm sand background
+      // (set above) stays, so there's no jarring sky pop-in and the viewport reads
+      // cohesively with the minimal desert UI. The HDRI only lights the wood.
+      hdr.dispose();
       this._envRT = rt;
-      this._hdrTex = hdr;
     }, undefined, () => { /* keep the sand background on load failure */ });
 
     // ---- lighting --------------------------------------------------------
