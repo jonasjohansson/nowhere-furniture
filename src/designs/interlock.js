@@ -45,7 +45,7 @@ export const INTERLOCK = [
       { key: 'seatH', label: 'Seat height', min: 420, max: 460, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
       { key: 'len',   label: 'Top length',  min: 440, max: 700, step: 10, default: 520, unit: 'mm' },
       { key: 'depth', label: 'Top depth',   min: 220, max: 360, step: 10, default: 280, unit: 'mm' },
-      { key: 'legW',  label: 'Leg width',   min: 70,  max: 130, step: 5,  default: 90,  unit: 'mm' },
+      { key: 'legW',  label: 'Leg width',   min: 70,  max: 200, step: 5,  default: 130, unit: 'mm' },
     ],
 
     build(p) {
@@ -67,7 +67,9 @@ export const INTERLOCK = [
       // board sits just OUTBOARD of the top, rising the full height to the surface.
       const legZ   = hz + legThk / 2;          // leg centre z (inner face at hz)
       const endIn  = Math.max(20, Math.round(p.len * 0.06)); // top overhang past the end legs
-      const legX   = hx - p.legW / 2 - endIn;  // leg centre x (two per side, near the ends)
+      // Clamp leg width so the two legs per side leave a real apron between them.
+      const legW   = Math.min(p.legW, hx - endIn - 40);
+      const legX   = hx - legW / 2 - endIn;    // leg centre x (two per side, near the ends)
       const legH   = seatTop;                  // full height: leg top flush with the surface
       const legY   = legH / 2;
 
@@ -76,7 +78,7 @@ export const INTERLOCK = [
       const aprH    = 80;                                  // apron board height
       const aprTopY = seatTop - topThk;                    // apron top under the board
       const aprY    = aprTopY - aprH / 2;
-      const aprLen  = 2 * legX - p.legW;                   // inner face to inner face of the two legs
+      const aprLen  = 2 * legX - legW;                   // inner face to inner face of the two legs
 
       const parts = [];
       const joints = [];
@@ -89,7 +91,7 @@ export const INTERLOCK = [
       for (const sz of [-1, 1]) {
         for (const sx of [-1, 1]) {
           const tag = `LEG-${sz < 0 ? 'B' : 'F'}${sx < 0 ? 'L' : 'R'}`;
-          parts.push(panel(tag, 'Board leg', legStock, p.legW, legH, 'xy',
+          parts.push(panel(tag, 'Board leg', legStock, legW, legH, 'xy',
             { x: sx * legX, y: legY, z: sz * legZ }, 'Legs'));
           joints.push(faceJoint(legThk, 3, 'leg screwed to the top edge + the side apron'));
         }
@@ -103,7 +105,7 @@ export const INTERLOCK = [
       joints.push(panelEdgeJoint(topStock, 2 * p.len, 200, 'top board screwed down to both aprons'));
 
       const steps = [
-        `Cut from one ply18 sheet: 1 top board (${p.len}×${p.depth}), 4 board-legs (${p.legW}×${legH}), 2 side aprons (${aprLen}×${aprH}).`,
+        `Cut from one ply18 sheet: 1 top board (${p.len}×${p.depth}), 4 board-legs (${legW}×${legH}), 2 side aprons (${aprLen}×${aprH}).`,
         'Make the two side frames: stand two legs and screw a side apron between them just below where the top will sit (apron top = top-board underside). Two identical ⊓-frames.',
         'Stand the two side frames the top depth apart and drop the top board between them so its long edges land against the leg inner faces, flush with the leg tops.',
         'Screw through each leg into the top edge (3 per leg) and down through the top into both aprons — all screws from outside, Mari-style.',
