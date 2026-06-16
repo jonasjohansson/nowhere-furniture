@@ -565,14 +565,28 @@ export const BENCHES = [
       // ---- low stretcher tying the two ends ---------------------------------
       // Without this the two box-ends could lean toward/away from each other;
       // a single low stretcher along x triangulates the long plane and stiffens
-      // the whole bench. Sits ~100mm off the floor, centred in depth.
-      const stY = 100 + SEC(stretchStock).h / 2;
+      // the whole bench. It runs at z=0 (centred in depth) where the uprights
+      // are NOT — so to physically tie the ends it must reach the FOOT beams,
+      // which span the full depth and so are present at z=0. We therefore length
+      // the stretcher so each end butts hard into the inner face of a foot beam,
+      // and drop it to floor level so it overlaps the feet in height. That makes
+      // a real, screwed joint instead of a stick hanging in mid-air.
+      const stretchSec = SEC(stretchStock);          // {w:45, h:70}
+      // Foot beams run along z at x = +/-endX, section w (x-dim) = stretchSec.w.
+      const footInnerX = endX - stretchSec.w / 2;     // inner face of each foot
+      // Span the stretcher between the two foot inner faces and bury its ends a
+      // touch into each foot so the butt joint has meat to screw into.
+      const stretchLen = 2 * footInnerX + stretchSec.w; // ends reach foot centres
+      // Sit it on the floor, sharing the feet's height band so it actually
+      // touches them (feet occupy y 0..legSec.h). Low + centred = anti-sway tie.
+      const stY = stretchSec.h / 2;                   // bottom on the ground
       parts.push(beam(
-        'STRETCH', 'Low stretcher', stretchStock, p.len - 2 * (overhang + legSec.w),
+        'STRETCH', 'Low stretcher', stretchStock, stretchLen,
         'x', { x: 0, y: stY, z: 0 }, 'Brace',
       ));
       joints.push(buttJoint(stretchStock, 2 * 2,
-        'low stretcher into each box-end, 2 per end — kills the two ends swaying'));
+        'low stretcher butted into each box-end foot at z=0 and screwed through ' +
+        'the foot, 2 per end — ties the two ends and kills them swaying'));
 
       // ---- the plank top ----------------------------------------------------
       // One plywood panel, lies flat ('xz'), screwed down into both top cleats.

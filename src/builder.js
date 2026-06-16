@@ -26,7 +26,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SHEETS, TIMBER, MM } from './stock.js';
-import { createWoodMaterial, disposeWoodCache } from './wood.js';
+import { disposeWoodCache } from './wood.js';
+import { materialMaterial, defaultMaterialForStock } from './materials.js';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -103,6 +104,7 @@ export class Builder {
     // loadParts() and let the resize handler fire the actual frame once layout
     // has settled (see ADD 1).
     this._pendingFrame = false;
+    this._materialId = null; // active material from the library; null = auto per stock
 
     // ---- undo / redo history --------------------------------------------
     // Bounded ring of { parts: PartSpec[], selectedId }. `_applying` guards the
@@ -483,6 +485,13 @@ export class Builder {
   setSnap(on) {
     this._snap = !!on;
     this._applySnap();
+  }
+
+  /** Set the active material for the whole piece (a MATERIALS id, or null/'' =
+   *  auto per stock). Re-skins every part; geometry/BOM are unaffected. */
+  setMaterial(id) {
+    this._materialId = id || null;
+    for (const item of this.items.values()) this._applyMaterial(item);
   }
 
   /** Gizmo space: 'local' | 'world'. */
@@ -997,10 +1006,12 @@ export class Builder {
     const longest = Math.max(w, h, d);
     const longAxis = longest === w ? 'x' : (longest === h ? 'y' : 'z');
 
-    // Hand off to the wood module: it returns authentic per-face grain (long
-    // grain on the 4 sides, end grain on the 2 cut faces) as a 6-material array,
-    // grain oriented along longAxis, with deterministic per-board variation.
-    const mat = createWoodMaterial(THREE, {
+    // Hand off to the materials library: resolves the active material (or a sane
+    // default per stock) and returns authentic per-face grain (long grain on the
+    // 4 sides, end grain on the 2 cut faces) as a 6-material array, grain along
+    // longAxis, with deterministic per-board variation.
+    const matId = this._materialId || defaultMaterialForStock(item.spec.stock);
+    const mat = materialMaterial(THREE, matId, {
       stockKey: item.spec.stock,
       baseColor: color,
       longAxis,

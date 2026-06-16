@@ -44,6 +44,138 @@ const NORMAL_STRENGTH = 0.55;   // low-moderate; grooves catch raking light
 const FALLBACK_COLOR = 0xc9a063;// warm pine if stockKey unknown / no color
 
 // ----------------------------------------------------------------------------
+// SPECIES + FINISH LIBRARY (opt-in via opts.style)
+//
+// `opts.style = { species, finish, paintColor? }` is FULLY OPTIONAL. When it is
+// absent the legacy code path runs untouched (byte-identical output). When it is
+// present, the species sets the wood's colour palette + grain character, and the
+// finish modulates colour / roughness / sheen on top.
+//
+// A species descriptor overrides timberHsl()'s amber anchor with a hand-tuned
+// {h,s,l} for the earlywood field, plus knobs the canvas builders read:
+//   ew      : earlywood HSL anchor (the lighter "spring" wood between rings)
+//   lwDark  : extra lightness drop for latewood (dark ring) bands
+//   lwSat   : extra saturation in latewood
+//   redden  : warm hue shift in latewood (overrides the per-board jitter)
+//   ringMul : ring-band frequency multiplier (rings closer/farther apart)
+//   ringBias: contrast/sharpness of the ring (1 = nominal; <1 fainter, >1 harder)
+//   striMul : fine-striation darkness multiplier (grain "lines" visibility)
+//   poreMul : pore speckle multiplier (open vs closed grain)
+//   blotchMul: large-scale blotch/figure strength
+//   roughBase: roughness-map base for this species before the finish adjusts it
+//
+// Hues are in turns (0..1). The amber/timber band sits ~0.06..0.11.
+// ----------------------------------------------------------------------------
+const SPECIES = {
+  // PINE — pale warm golden softwood. Wide soft rings, visible but gentle.
+  pine: {
+    ew: { h: 0.095, s: 0.30, l: 0.70 },
+    lwDark: 0.12, lwSat: 0.05, redden: 0.020,
+    ringMul: 0.9, ringBias: 1.0, striMul: 1.0, poreMul: 0.7, blotchMul: 1.0,
+    roughBase: 0.60,
+  },
+  // OAK — mid honey-brown hardwood. Stronger, harder rings + open pores.
+  oak: {
+    ew: { h: 0.082, s: 0.33, l: 0.60 },
+    lwDark: 0.18, lwSat: 0.06, redden: 0.018,
+    ringMul: 1.15, ringBias: 1.35, striMul: 1.15, poreMul: 1.5, blotchMul: 1.0,
+    roughBase: 0.62,
+  },
+  // WALNUT — dark chocolate brown hardwood. Fine, tight, low-contrast grain.
+  walnut: {
+    ew: { h: 0.060, s: 0.34, l: 0.34 },
+    lwDark: 0.10, lwSat: 0.04, redden: 0.012,
+    ringMul: 1.5, ringBias: 0.8, striMul: 0.9, poreMul: 0.8, blotchMul: 1.3,
+    roughBase: 0.55,
+  },
+  // BIRCH-PLY — very pale, near-cream. Faint, almost-straight grain (plywood).
+  'birch-ply': {
+    ew: { h: 0.105, s: 0.20, l: 0.78 },
+    lwDark: 0.05, lwSat: 0.02, redden: 0.008,
+    ringMul: 1.3, ringBias: 0.45, striMul: 0.6, poreMul: 0.3, blotchMul: 0.6,
+    roughBase: 0.58,
+  },
+  // IROKO / TEAK — warm outdoor golden-brown hardwood. Rich, oily, even.
+  iroko: {
+    ew: { h: 0.075, s: 0.40, l: 0.50 },
+    lwDark: 0.13, lwSat: 0.06, redden: 0.022,
+    ringMul: 1.1, ringBias: 1.0, striMul: 1.0, poreMul: 1.1, blotchMul: 1.1,
+    roughBase: 0.58,
+  },
+};
+SPECIES.teak = SPECIES.iroko; // alias
+
+// FINISH — modulates the species. Each returns adjustments applied (a) per-texel
+// in the canvas builders (colour/desaturation/char) and (b) on the material
+// (roughness floor, clearcoat sheen, envMapIntensity).
+//   satMul/lightAdd/warmAdd : multiply saturation / add lightness / add warmth
+//                             to every texel (the "look" of the finish)
+//   roughFloor/roughCeil    : clamp window for the roughness map (satin vs matte)
+//   clearcoat/clearcoatRough: physical-ish sheen (we approximate on Standard via
+//                             a lower effective roughness + stronger envMap)
+//   envIntensity            : envMap reflection strength
+//   limewash/char/paint     : special texel modes (see builders)
+const FINISHES = {
+  // RAW — sawn/planed, matte, true species colour.
+  raw: {
+    satMul: 1.0, lightAdd: 0.0, warmAdd: 0.0,
+    roughFloor: 0.62, roughCeil: 0.82, clearcoat: 0.0, envIntensity: 0.5,
+  },
+  // OILED — hardwax/linseed: richer + warmer colour, lower roughness, soft sheen.
+  oiled: {
+    satMul: 1.18, lightAdd: -0.02, warmAdd: 0.004,
+    roughFloor: 0.42, roughCeil: 0.60, clearcoat: 0.18, clearcoatRough: 0.35,
+    envIntensity: 0.9,
+  },
+  // LIMEWASHED — white pigment lightens + desaturates; pigment sits IN the grain
+  // grooves so latewood/pores read whiter (handled in builder via `limewash`).
+  limewashed: {
+    satMul: 0.45, lightAdd: 0.14, warmAdd: -0.004,
+    roughFloor: 0.66, roughCeil: 0.86, clearcoat: 0.0, envIntensity: 0.4,
+    limewash: 0.75,
+  },
+  // CHARRED — shou-sugi-ban: near-black, very low saturation, cracked-char
+  // texture (handled in builder via `char`). Matte-to-satin.
+  charred: {
+    satMul: 0.30, lightAdd: -0.46, warmAdd: 0.0,
+    roughFloor: 0.55, roughCeil: 0.80, clearcoat: 0.06, clearcoatRough: 0.5,
+    envIntensity: 0.5, char: 0.85,
+  },
+  // PAINTED — solid pigment over wood; faint grain/texture telegraphs through.
+  // `paint` blends every texel toward paintColor, keeping a little grain relief.
+  painted: {
+    satMul: 1.0, lightAdd: 0.0, warmAdd: 0.0,
+    roughFloor: 0.50, roughCeil: 0.66, clearcoat: 0.10, clearcoatRough: 0.4,
+    envIntensity: 0.6, paint: 0.86,
+  },
+};
+
+/**
+ * Normalize opts.style into a resolved descriptor, or null when absent/invalid.
+ * Returns { species, finish, paintRgb, key } — key is the cache discriminator.
+ * Backward-compatible: any falsy / unrecognised style yields null -> legacy path.
+ */
+function resolveStyle(style) {
+  if (!style || typeof style !== 'object') return null;
+  const spKey = String(style.species || '').toLowerCase();
+  const fnKey = String(style.finish || '').toLowerCase();
+  const species = SPECIES[spKey];
+  const finish = FINISHES[fnKey];
+  if (!species && !finish) return null; // nothing usable -> legacy path
+  const sp = species || SPECIES.pine;
+  const fn = finish || FINISHES.raw;
+  // Paint colour only meaningful for painted finish; default barn-ish neutral.
+  let paintRgb = null;
+  if (fn.paint) {
+    const pc = (typeof style.paintColor === 'number' && isFinite(style.paintColor))
+      ? style.paintColor >>> 0 : 0x8a8d7f;
+    paintRgb = hexToRgb(pc);
+  }
+  const key = `${spKey || 'pine'}|${fnKey || 'raw'}|${paintRgb ? (style.paintColor >>> 0) : 'np'}`;
+  return { species: sp, finish: fn, paintRgb, key };
+}
+
+// ----------------------------------------------------------------------------
 // Module cache: cacheKey -> { albedo, normal, rough, end:{albedo,normal,rough} }
 // where each entry holds the raw HTMLCanvasElement-backed CanvasTextures we
 // clone from. Keyed by quantized tint so similar boards share work.
@@ -226,8 +358,11 @@ function quantizeTint(hex) {
 /**
  * Build the three long-grain canvases. Returns { albedo, normal, rough } as
  * HTMLCanvasElement. Pure-deterministic given (tintHex, seed).
+ *
+ * `style` (optional) is a resolved descriptor from resolveStyle(); when null the
+ * legacy amber-timber look is produced unchanged.
  */
-function buildLongGrainCanvases(tintHex, seed) {
+function buildLongGrainCanvases(tintHex, seed, style) {
   const W = TEX, H = TEX;
   const albedo = makeCanvas(W, H);
   const aCtx = albedo.getContext('2d');
@@ -238,7 +373,31 @@ function buildLongGrainCanvases(tintHex, seed) {
   // grain — striations, rings, knots all push the surface consistently.
   const height = new Float32Array(W * H);
 
-  const anchor = timberHsl(tintHex);
+  // Anchor: legacy path derives an amber timber HSL from the tint. A styled
+  // path uses the species' earlywood anchor instead (hand-tuned per wood).
+  const sp = style ? style.species : null;
+  const fn = style ? style.finish : null;
+  const anchor = sp ? { h: sp.ew.h, s: sp.ew.s, l: sp.ew.l } : timberHsl(tintHex);
+
+  // Per-species grain knobs (defaults reproduce the legacy character at 1.0).
+  const ringMul = sp ? sp.ringMul : 1.0;
+  const ringBias = sp ? sp.ringBias : 1.0;
+  const striMul = sp ? sp.striMul : 1.0;
+  const poreMul = sp ? sp.poreMul : 1.0;
+  const blotchMul = sp ? sp.blotchMul : 1.0;
+  const spLwDark = sp ? sp.lwDark : 0.12;
+  const spLwSat = sp ? sp.lwSat : 0.05;
+  // Char/limewash/paint finish modes read in the texel loop.
+  const charAmt = fn && fn.char ? fn.char : 0;
+  const limewashAmt = fn && fn.limewash ? fn.limewash : 0;
+  const paintAmt = fn && fn.paint ? fn.paint : 0;
+  const paintRgb = style ? style.paintRgb : null;
+  const satMul = fn ? fn.satMul : 1.0;
+  const lightAdd = fn ? fn.lightAdd : 0.0;
+  const warmAdd = fn ? fn.warmAdd : 0.0;
+  const roughBase = sp ? sp.roughBase : 0.58;
+  const roughFloor = fn ? fn.roughFloor : 0.46;
+  const roughCeil = fn ? fn.roughCeil : 0.72;
 
   const r = mulberry32(seed);
   // Per-board variation: hue/value shift, ring phase + frequency, grain offset.
@@ -246,7 +405,10 @@ function buildLongGrainCanvases(tintHex, seed) {
   const lightShift = (r() - 0.5) * 0.05;
   const ringPhase = r() * Math.PI * 2;
   const ringFreqJitter = 0.8 + r() * 0.5;     // 0.8..1.3 x nominal
-  const redden = 0.015 + r() * 0.02;          // latewood subtle warm darkening
+  // Species override the latewood warm shift; else legacy per-board jitter.
+  const redden = sp ? sp.redden : (0.015 + r() * 0.02);
+  // Deterministic char-crack noise field (only used when charred).
+  const charFbm = makeFbm1D(seed ^ 0x6c8e9cf5, 4);
 
   // FBM fields. The canvas U axis spans the WHOLE board length (repeat = 1), so
   // U=0..1 is the full board: every feature is full-length and continuous, and
@@ -258,7 +420,7 @@ function buildLongGrainCanvases(tintHex, seed) {
   const blotchFbmU = makeFbm1D(seed ^ 0x27d4eb2f, 2);
 
   // Growth-ring band frequency: a few bands across the canvas height.
-  const ringBands = (5 + Math.floor(r() * 4)) * ringFreqJitter;
+  const ringBands = (5 + Math.floor(r() * 4)) * ringFreqJitter * ringMul;
 
   // Fine striation frequency along V (each board-cross unit has many fibres).
   const striationFreq = 70 + Math.floor(r() * 60);
@@ -317,22 +479,25 @@ function buildLongGrainCanvases(tintHex, seed) {
       let ring = Math.sin(ringPhaseF);
       // bias toward latewood being a thin dark line:
       ring = Math.sign(ring) * Math.pow(Math.abs(ring), 0.6);
-      const late = smoothstep(0.2, 0.95, ring); // 0 earlywood .. 1 latewood
+      // ringBias sharpens (>1) or softens (<1) the earlywood->latewood edge.
+      const lateRaw = smoothstep(0.2, 0.95, ring); // 0 earlywood .. 1 latewood
+      const late = ringBias === 1.0 ? lateRaw
+        : clamp(0.5 + (lateRaw - 0.5) * ringBias, 0, 1);
 
       // --- fine striations running the FULL length of the grain: many thin
       // darker fibre lines, continuous end-to-end (function of V, with only a
       // low-freq U jitter so they wander naturally without breaking up).
       const striY = vv * striationFreq + grainWave(u * 3.0) * 0.8;
       const stri = Math.abs(Math.sin(striY * Math.PI));
-      const striMark = Math.pow(stri, 6) * 0.09; // dark thin lines
+      const striMark = Math.pow(stri, 6) * 0.09 * striMul; // dark thin lines
 
       // --- pores: fine speckle, denser in latewood (open-grain look).
       const poreN = makeHashNoise(x, y, seed);
       const pore = (poreN > 0.93 ? (poreN - 0.93) / 0.07 : 0) * (0.4 + 0.6 * late);
-      const poreMark = pore * 0.09;
+      const poreMark = pore * 0.09 * poreMul;
 
       // --- large blotch: gentle lightness cloud.
-      const blotch = (blotchFbm(v * 2.2) * 0.5 + blotchFbmU(u * 0.8) * 0.5) * 0.045;
+      const blotch = (blotchFbm(v * 2.2) * 0.5 + blotchFbmU(u * 0.8) * 0.5) * 0.045 * blotchMul;
 
       // --- assemble HSL for this texel from the anchor.
       let hh = anchor.h + hueShift;
@@ -340,9 +505,10 @@ function buildLongGrainCanvases(tintHex, seed) {
       let ll = anchor.l + lightShift + blotch;
 
       // Latewood: darker + a touch warmer. Keep saturation gain SMALL so the
-      // dark bands stay believable golden/brown, never candy red.
-      ll -= late * 0.12;
-      ss += late * 0.05;
+      // dark bands stay believable golden/brown, never candy red. Species set
+      // their own latewood depth/sat (defaults reproduce the legacy 0.12/0.05).
+      ll -= late * spLwDark;
+      ss += late * spLwSat;
       hh -= late * redden;       // a subtle warm shift, not a red jump
 
       // Striations + pores darken locally.
@@ -366,7 +532,44 @@ function buildLongGrainCanvases(tintHex, seed) {
         }
       }
 
-      const rgb = hslToRgb(hh, ss, ll);
+      // --- FINISH POST-PROCESS (only when styled). Applied after the natural
+      // wood field is assembled so each finish reshapes the SAME grain.
+      let charCrack = 0;
+      if (style) {
+        // Global finish recolour: desaturate/lighten/warm per finish table.
+        ss *= satMul;
+        ll += lightAdd;
+        hh += warmAdd;
+        // LIMEWASHED: white pigment collects in the grooves (latewood + pores),
+        // so the grained areas read LIGHTER + more desaturated, not darker.
+        if (limewashAmt > 0) {
+          const inGrain = clamp(late * 0.7 + (poreMark / 0.09) * 0.5, 0, 1);
+          ll += inGrain * limewashAmt * 0.18;
+          ss *= 1 - inGrain * limewashAmt * 0.5;
+        }
+        // CHARRED: crush toward near-black; FBM-driven cracks reveal faint embers
+        // and bite into the surface (height) for a cracked-char relief.
+        if (charAmt > 0) {
+          const crack = Math.pow(clamp(charFbm(u * 6.0 + v * 9.0) * 0.5 + 0.5, 0, 1), 3);
+          charCrack = crack;
+          ll = ll * (1 - charAmt * 0.85) + crack * 0.06; // cracks glow slightly
+          ss *= 1 - charAmt * 0.6;
+        }
+      }
+
+      let rgb = hslToRgb(hh, ss, ll);
+
+      // PAINTED: blend the assembled wood toward the solid pigment, keeping a
+      // little grain so texture telegraphs through the coat.
+      if (paintAmt > 0 && paintRgb) {
+        const grainKeep = clamp(0.10 + late * 0.10 + (striMark / 0.09) * 0.08, 0, 0.3);
+        const m = paintAmt * (1 - grainKeep);
+        rgb = {
+          r: Math.round(rgb.r * (1 - m) + paintRgb.r * m),
+          g: Math.round(rgb.g * (1 - m) + paintRgb.g * m),
+          b: Math.round(rgb.b * (1 - m) + paintRgb.b * m),
+        };
+      }
       const idx = (y * W + x) * 4;
       aData[idx] = rgb.r;
       aData[idx + 1] = rgb.g;
@@ -374,16 +577,20 @@ function buildLongGrainCanvases(tintHex, seed) {
       aData[idx + 3] = 255;
 
       // Height: latewood + striations + pores sit slightly LOWER (grooves);
-      // knots pull down hard. Range roughly [-1, 0.2].
+      // knots pull down hard. Range roughly [-1, 0.2]. CHARRED adds cracked
+      // relief so the surface reads alligatored under raking light.
       height[y * W + x] =
-        -(late * 0.5) - striMark * 3.0 - poreMark * 2.0 + knotHeight;
+        -(late * 0.5) - striMark * 3.0 - poreMark * 2.0 + knotHeight
+        - (charCrack > 0 ? (1 - charCrack) * charAmt * 0.6 : 0);
     }
   }
   aCtx.putImageData(aImg, 0, 0);
 
-  // Derive normal + roughness from the SAME height field.
+  // Derive normal + roughness from the SAME height field. Species/finish set the
+  // roughness base + clamp window (legacy default 0.58 / 0.46..0.72 when null).
   const normal = heightToNormal(height, W, H, NORMAL_STRENGTH);
-  const rough = heightToRoughness(height, W, H, /*base*/ 0.58, /*late*/ null);
+  const rough = heightToRoughness(height, W, H, style ? roughBase : 0.58,
+    style ? roughFloor : 0.46, style ? roughCeil : 0.72);
 
   return { albedo, normal, rough };
 }
@@ -392,7 +599,7 @@ function buildLongGrainCanvases(tintHex, seed) {
 // Canvas synthesis — END GRAIN (concentric growth rings on the cut ends)
 // ----------------------------------------------------------------------------
 
-function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
+function buildEndGrainCanvases(tintHex, seed, ringSpacingPx, style) {
   const W = END_TEX, H = END_TEX;
   const albedo = makeCanvas(W, H);
   const aCtx = albedo.getContext('2d');
@@ -400,8 +607,22 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
   const aData = aImg.data;
   const height = new Float32Array(W * H);
 
-  const anchor = timberHsl(tintHex);
+  const sp = style ? style.species : null;
+  const fn = style ? style.finish : null;
+  const anchor = sp ? { h: sp.ew.h, s: sp.ew.s, l: sp.ew.l } : timberHsl(tintHex);
+  const spLwDark = sp ? sp.lwDark : 0.14; // legacy end-grain latewood drop was 0.14
+  const charAmt = fn && fn.char ? fn.char : 0;
+  const limewashAmt = fn && fn.limewash ? fn.limewash : 0;
+  const paintAmt = fn && fn.paint ? fn.paint : 0;
+  const paintRgb = style ? style.paintRgb : null;
+  const satMul = fn ? fn.satMul : 1.0;
+  const lightAdd = fn ? fn.lightAdd : 0.0;
+  const warmAdd = fn ? fn.warmAdd : 0.0;
+  const roughBase = sp ? sp.roughBase : 0.6;
+  const roughFloor = fn ? fn.roughFloor : 0.46;
+  const roughCeil = fn ? fn.roughCeil : 0.72;
   const r = mulberry32(seed ^ 0x51ed270b);
+  const charFbm = makeFbm1D(seed ^ 0x2545f491, 4);
 
   // Pith (ring centre) is usually off-canvas (boards are sawn off-centre), so
   // rings read as broad arcs. Place it well outside with deterministic jitter.
@@ -411,7 +632,7 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
   const lightShift = (r() - 0.5) * 0.05;
   const ringPx = ringSpacingPx;                 // pixels per growth ring
   const ringFbm = makeFbm1D(seed ^ 0xa54ff53a, 3);
-  const redden = 0.015 + r() * 0.02;
+  const redden = sp ? sp.redden : (0.015 + r() * 0.02);
 
   // Faint radial ray fleck (medullary rays) emanating from the pith.
   const rayCount = 30 + Math.floor(r() * 30);
@@ -432,29 +653,58 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
       const ray = Math.pow(Math.abs(Math.sin(ang * rayCount * 0.5)), 14) * 0.05;
 
       // Fine speckle.
-      const sp = makeHashNoise(x, y, seed ^ 0x1234) > 0.95 ? 0.06 : 0;
+      const spk = makeHashNoise(x, y, seed ^ 0x1234) > 0.95 ? 0.06 : 0;
 
       let hh = anchor.h + hueShift;
       let ss = anchor.s;
       let ll = anchor.l + lightShift + ray;
-      ll -= late * 0.14 + sp;
+      ll -= late * spLwDark + spk;
       ss += late * 0.05;
       hh -= late * redden;
 
-      const rgb = hslToRgb(hh, ss, ll);
+      // --- FINISH POST-PROCESS on the cut end (mirrors the long-grain logic so
+      // the ends match the faces). Only runs when styled.
+      let charCrack = 0;
+      if (style) {
+        ss *= satMul; ll += lightAdd; hh += warmAdd;
+        if (limewashAmt > 0) {
+          ll += late * limewashAmt * 0.18;
+          ss *= 1 - late * limewashAmt * 0.5;
+        }
+        if (charAmt > 0) {
+          const u2 = x / W, v2 = y / H;
+          const crack = Math.pow(clamp(charFbm(u2 * 6.0 + v2 * 9.0) * 0.5 + 0.5, 0, 1), 3);
+          charCrack = crack;
+          ll = ll * (1 - charAmt * 0.85) + crack * 0.06;
+          ss *= 1 - charAmt * 0.6;
+        }
+      }
+
+      let rgb = hslToRgb(hh, ss, ll);
+      if (paintAmt > 0 && paintRgb) {
+        const grainKeep = clamp(0.10 + late * 0.10, 0, 0.3);
+        const m = paintAmt * (1 - grainKeep);
+        rgb = {
+          r: Math.round(rgb.r * (1 - m) + paintRgb.r * m),
+          g: Math.round(rgb.g * (1 - m) + paintRgb.g * m),
+          b: Math.round(rgb.b * (1 - m) + paintRgb.b * m),
+        };
+      }
       const idx = (y * W + x) * 4;
       aData[idx] = rgb.r;
       aData[idx + 1] = rgb.g;
       aData[idx + 2] = rgb.b;
       aData[idx + 3] = 255;
 
-      height[y * W + x] = -(late * 0.5) - sp * 2;
+      height[y * W + x] = -(late * 0.5) - spk * 2
+        - (charCrack > 0 ? (1 - charCrack) * charAmt * 0.6 : 0);
     }
   }
   aCtx.putImageData(aImg, 0, 0);
 
   const normal = heightToNormal(height, W, H, NORMAL_STRENGTH * 0.8);
-  const rough = heightToRoughness(height, W, H, 0.6, null);
+  const rough = heightToRoughness(height, W, H, style ? roughBase : 0.6,
+    style ? roughFloor : null, style ? roughCeil : null);
   return { albedo, normal, rough };
 }
 
@@ -494,15 +744,18 @@ function heightToNormal(height, W, H, strength) {
  * Height -> roughness map. Oiled-wood semi-matte: grooves (lower height =
  * latewood/grain/pores) read slightly ROUGHER than the smoother earlywood.
  */
-function heightToRoughness(height, W, H, base) {
+function heightToRoughness(height, W, H, base, floor, ceil) {
+  // Default clamp window matches the legacy behaviour exactly (0.46..0.72).
+  const lo = (floor == null) ? 0.46 : floor;
+  const hi = (ceil == null) ? 0.72 : ceil;
   const canvas = makeCanvas(W, H);
   const ctx = canvas.getContext('2d');
   const img = ctx.createImageData(W, H);
   const d = img.data;
   for (let i = 0; i < W * H; i++) {
-    // height roughly [-2, 0.2]; lower -> rougher. Map to ~0.5..0.7.
+    // height roughly [-2, 0.2]; lower -> rougher. Map within the finish window.
     const hgt = clamp(height[i], -1.2, 0.2);
-    const rough = clamp(base + (-hgt) * 0.12, 0.46, 0.72);
+    const rough = clamp(base + (-hgt) * 0.12, lo, hi);
     const g = Math.round(rough * 255);
     const idx = i * 4;
     d[idx] = g; d[idx + 1] = g; d[idx + 2] = g; d[idx + 3] = 255;
@@ -553,22 +806,25 @@ function makeBaseTexture(THREE, canvas, colorSpace) {
  * once; per-part we clone them and stamp rotation/repeat/offset. Returns:
  *   { long: {albedo,normal,rough}, end: {albedo,normal,rough} }
  */
-function getBaseTextures(THREE, tintHex, seed) {
+function getBaseTextures(THREE, tintHex, seed, style) {
   const qTint = quantizeTint(tintHex);
-  const key = `${qTint}`;
+  // Style is part of the cache key so a styled board never collides with the
+  // legacy (no-style) base or with a differently-styled one.
+  const styleKey = style ? style.key : 'legacy';
+  const key = `${qTint}|${styleKey}`;
   let entry = _cache.get(key);
   if (entry) return entry;
 
-  // Use a tint-derived seed so the cached base is stable per tint (per-board
+  // Use a tint+style-derived seed so the cached base is stable per look (per-board
   // jitter is applied later via clone transforms + material.color, not here —
-  // so two boards of the same stock can share this expensive base).
-  const baseSeed = hashString(`wood|${qTint}`);
+  // so two boards of the same stock+style can share this expensive base).
+  const baseSeed = hashString(`wood|${qTint}|${styleKey}`);
 
-  const lg = buildLongGrainCanvases(tintHex, baseSeed);
+  const lg = buildLongGrainCanvases(tintHex, baseSeed, style);
   const ringSpacingPx = clamp(
     (RING_PERIOD_MM / CROSS_PERIOD_MM) * END_TEX, 6, END_TEX / 4
   );
-  const eg = buildEndGrainCanvases(tintHex, baseSeed, ringSpacingPx);
+  const eg = buildEndGrainCanvases(tintHex, baseSeed, ringSpacingPx, style);
 
   entry = {
     long: {
@@ -620,17 +876,29 @@ function makeFaceMaterial(THREE, base, role, cfg) {
   const normalMap = cloneTex(set.normal, cfg.rot, cfg.repU, cfg.repV, cfg.offU, cfg.offV);
   const roughnessMap = cloneTex(set.rough, cfg.rot, cfg.repU, cfg.repV, cfg.offU, cfg.offV);
 
+  // Finish-level material knobs. Legacy (no style) keeps the original numbers.
+  const fm = cfg.finishMat;
+  const envIntensity = fm ? fm.envIntensity : 0.7;
+  // MeshStandardMaterial has no clearcoat lobe (that's Physical). We approximate
+  // a finish's sheen by scaling the roughness map down (smoother => glossier) and
+  // boosting envMap reflection — cheap, and keeps the array all-Standard.
+  const roughScale = fm && fm.clearcoat ? (1 - fm.clearcoat * 0.5) : 1.0;
+
   const m = new THREE.MeshStandardMaterial({
     map,
     normalMap,
     roughnessMap,
     color: cfg.tint,
-    roughness: 1.0,          // modulated by roughnessMap (greyscale ~0.5..0.7)
+    roughness: roughScale,   // modulated by roughnessMap (greyscale ~0.4..0.86)
     metalness: 0.0,
     envMap: cfg.environment || null,
-    envMapIntensity: 0.7,
+    envMapIntensity: envIntensity,
   });
-  if (m.normalScale && m.normalScale.set) m.normalScale.set(0.8, 0.8);
+  if (m.normalScale && m.normalScale.set) {
+    // Charred/painted surfaces relieve less; oiled a touch more. Subtle.
+    const ns = fm && fm.char ? 1.05 : 0.8;
+    m.normalScale.set(ns, ns);
+  }
   return m;
 }
 
@@ -651,6 +919,7 @@ function makeFaceMaterial(THREE, base, role, cfg) {
 export function createWoodMaterial(THREE, opts) {
   const o = opts || {};
   const tint = resolveTint(o.stockKey, o.baseColor);
+  const style = resolveStyle(o.style); // null => legacy path (unchanged output)
   const seedStr = (o.seed == null ? 'wood' : String(o.seed));
   const seed = hashString(seedStr);
   const rnd = mulberry32(seed);
@@ -665,10 +934,17 @@ export function createWoodMaterial(THREE, opts) {
   {
     // anchor near white so it tints rather than recolours the texture
     const hsl = rgbToHsl(255, 255, 255);
-    const rgb = hslToRgb(0.085 + vH, clamp(0.04 + vS, 0, 0.12), clamp(vL, 0.7, 1));
+    // Painted/charred bases already carry their final colour in the texture, so
+    // the per-board material.color must stay near-neutral (a faint, almost-grey
+    // board-to-board value wobble) instead of pushing an amber tint over paint.
+    const neutralTint = style && (style.finish.paint || style.finish.char);
+    const rgb = neutralTint
+      ? hslToRgb(0, 0, clamp(vL, 0.85, 1))           // near-white, just value wobble
+      : hslToRgb(0.085 + vH, clamp(0.04 + vS, 0, 0.12), clamp(vL, 0.7, 1));
     tintColor.setRGB(rgb.r / 255, rgb.g / 255, rgb.b / 255);
     void hsl;
   }
+  const finishMat = style ? style.finish : null;
   const offU = rnd();   // grain slice offset
   const offV = rnd();
 
@@ -684,7 +960,7 @@ export function createWoodMaterial(THREE, opts) {
   }
   const lenMM = longAxis === 'x' ? w : longAxis === 'y' ? h : d;
 
-  const base = getBaseTextures(THREE, tint, seed);
+  const base = getBaseTextures(THREE, tint, seed, style);
 
   // ALONG the grain we use a single continuous field that spans the WHOLE board
   // (repeat = 1): the grain runs end-to-end with no repeating motif and no seam.
@@ -725,7 +1001,7 @@ export function createWoodMaterial(THREE, opts) {
     // tileable on U, so any non-zero U offset would wrap and produce a visible
     // seam mid-board. The single continuous field is shown start-to-end. Board
     // variation comes from the V offset + per-board material.color tint instead.
-    return { rot, repU, repV, offU: 0, offV, tint: tintColor, environment: o.environment };
+    return { rot, repU, repV, offU: 0, offV, tint: tintColor, environment: o.environment, finishMat };
   }
 
   // End-grain face: square-ish ring texture, repeats from the two cross dims.
@@ -733,7 +1009,7 @@ export function createWoodMaterial(THREE, opts) {
     const [a0, a1] = facePlane[faceKey];
     const repU = repAcross(dimOf[a0]);
     const repV = repAcross(dimOf[a1]);
-    return { rot: 0, repU, repV, offU, offV, tint: tintColor, environment: o.environment };
+    return { rot: 0, repU, repV, offU, offV, tint: tintColor, environment: o.environment, finishMat };
   }
 
   // Which two faces are the cut ends? The faces whose NORMAL is the long axis.
@@ -758,7 +1034,7 @@ export function createWoodMaterial(THREE, opts) {
       rot: 0,
       repU: repAlong(lenMM),
       repV: repAcross(Math.min(w, h, d)),
-      offU: 0, offV, tint: tintColor, environment: o.environment,
+      offU: 0, offV, tint: tintColor, environment: o.environment, finishMat,
     });
   }
 }

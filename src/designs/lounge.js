@@ -98,14 +98,39 @@ export const LOUNGE = [
       joints.push(panelEdgeJoint(slatStock, p.seatD, p.seatD / seat.count,
         `${seat.count} seat slats face-screwed down into both side frames`));
 
-      // ---- Back slats: spread up the BACK height, then leaned to the recline
-      // angle and parked along the rear edge so they form a single reclined
-      // plane the sitter's spine rests against. ----
+      // ---- Raked back POSTS / stiles: two timber uprights, one in line with
+      // each side frame, leaned to the SAME recline angle as the back slats.
+      // They rise from below seat level (overlapping the side frame, so the
+      // back is triangulated into the seat box and can't fold) up past the top
+      // back slat. EVERY back slat lands on and screws to these two posts — the
+      // posts are what the back plane is actually built on, not thin air. ----
+      const backZ = -p.seatD / 2 + slatThick / 2;     // rear edge of the frame
+      const postFoot = -120;                          // start 120 below seat → laps the side frame
+      const postTop = p.backH + slatW / 2;            // reach just past the top slat
+      const postLen = postTop - postFoot;             // length up the raked plane
+      const postMidS = (postFoot + postTop) / 2;      // plane-distance of post centre
+      const postY = seatTop + postMidS * Math.cos(rake);
+      const postZ = backZ - postMidS * Math.sin(rake);
+      for (const side of [-1, 1]) {
+        parts.push({
+          ...beam(`POST-${side < 0 ? 'L' : 'R'}`, 'Raked back post', slatStock,
+            postLen, 'y',
+            { x: side * (halfW - sideT / 2), y: postY, z: postZ }, 'Back'),
+          rot: { x: -recline, y: 0, z: 0 },           // same lean as the slats
+        });
+      }
+      joints.push(buttJoint(slatStock, 4,
+        'each raked back post lapped onto its side frame, 2 screws (triangulates the back)'));
+
+      // ---- Back slats: spread up the BACK height, leaned to the recline angle,
+      // each one landing ACROSS the two raked posts (it screws to a post at each
+      // end). The slats form the reclined plane the sitter's spine rests against;
+      // the posts behind them carry the load. ----
       const back = slatField(p.backH, slatW, p.gap);
-      const backZ = -p.seatD / 2 + slatThick / 2;   // rear edge of the frame
       back.positions.forEach((s, i) => {
         // s = distance up the (un-raked) back plane from seat level. Project it
-        // into world y/z so the slats actually tilt back as they climb.
+        // into world y/z so the slats actually tilt back as they climb — staying
+        // on the same plane line as the posts, so every slat meets both posts.
         const dy = s * Math.cos(rake);
         const dz = s * Math.sin(rake);
         parts.push({
@@ -115,15 +140,16 @@ export const LOUNGE = [
         });
       });
       joints.push(panelEdgeJoint(slatStock, p.backH, p.backH / back.count,
-        `${back.count} back slats face-screwed into both side frames`));
+        `${back.count} back slats face-screwed onto both raked back posts`));
 
       const seatSpan = p.width;                       // unsupported run of a seat slat
       const steps = [
-        'Cut the two ply side frames (seatD x seatH) and all seat + back slats to width.',
+        'Cut the two ply side frames (seatD x seatH), the two raked back posts, and all seat + back slats to width.',
         'Stand the two side frames parallel, seatD apart, on a flat floor.',
         `Mark the seat line at ${seatTop} mm; screw the seat slats across the top with a ${seat.gap} mm gap.`,
-        `Mark the back-slat positions up the rear edge and pre-set the ${recline}° lean.`,
-        'Screw the back slats to both frames, working bottom to top, keeping the lean consistent.',
+        `Lap a raked back post onto each side frame's rear edge, pre-set to the ${recline}° lean ` +
+          'and lapping ~120 mm down past the seat so the back is triangulated into the seat box.',
+        'Screw the back slats across the two posts, working bottom to top — every slat lands on both posts, keeping the lean consistent.',
         'Check the chair sits square and rocks on nothing; ease any sharp front-edge slat.',
       ];
       const notes = [
@@ -131,6 +157,9 @@ export const LOUNGE = [
           'reclined, you drop into it rather than perch on it.',
         `Back reclined to ${p.backAngle}° from the seat (${recline}° off vertical), ` +
           'matching ERGO.lounge — an open chest-back angle for relaxed lounging, not dining.',
+        'Two raked back posts, one per side, carry the back: they lap ~120 mm down onto the side ' +
+          'frames (triangulating the back into the seat box so it cannot fold) and every back slat ' +
+          'screws across both posts — nothing in the back hangs unsupported.',
         `Seat slat unsupported span is the full width ${seatSpan} mm; ` +
           (seatSpan > beamMaxSpan(slatStock)
             ? `that exceeds ~${beamMaxSpan(slatStock)} mm for ${slatStock} — keep the ` +
@@ -225,9 +254,33 @@ export const LOUNGE = [
       joints.push(panelEdgeJoint(slatStock, p.seatD, p.seatD / seat.count,
         `${seat.count} seat slats face-screwed into both frames (and any mid bearer)`));
 
-      // ---- Back slats sweep up from the head (rear) edge, strongly reclined. ----
-      const back = slatField(p.backH, slatW, p.gap);
+      // ---- Raked back POSTS / stiles: two timber uprights in line with the
+      // A-frame sides, leaned to the same strong recline as the back slats. They
+      // lap down onto the A-frames (triangulating the leaned back into the seat
+      // frame so it stays rigid under a lie-back load) and every back slat lands
+      // on and screws to them. Without these the upper back slats would float. ----
       const backZ = -p.seatD / 2 + slatThick / 2;
+      const postFoot = -140;                          // start 140 below seat → laps the A-frame
+      const postTop = p.backH + slatW / 2;            // reach just past the top slat
+      const postLen = postTop - postFoot;
+      const postMidS = (postFoot + postTop) / 2;
+      const postY = seatTop + postMidS * Math.cos(rake);
+      const postZ = backZ - postMidS * Math.sin(rake);
+      for (const side of [-1, 1]) {
+        parts.push({
+          ...beam(`POST-${side < 0 ? 'L' : 'R'}`, 'Raked back post', slatStock,
+            postLen, 'y',
+            { x: side * (halfW - t / 2), y: postY, z: postZ }, 'Back'),
+          rot: { x: -recline, y: 0, z: 0 },
+        });
+      }
+      joints.push(buttJoint(slatStock, 4,
+        'each raked back post lapped onto its A-frame, 2 screws (triangulates the back)'));
+
+      // ---- Back slats sweep up from the head (rear) edge, strongly reclined,
+      // each one landing across the two raked posts (a screw to a post at each
+      // end). The posts behind the plane carry the load; the slats are the face. ----
+      const back = slatField(p.backH, slatW, p.gap);
       back.positions.forEach((s, i) => {
         const dy = s * Math.cos(rake);
         const dz = s * Math.sin(rake);
@@ -238,16 +291,18 @@ export const LOUNGE = [
         });
       });
       joints.push(panelEdgeJoint(slatStock, p.backH, p.backH / back.count,
-        `${back.count} back slats face-screwed into both frames`));
+        `${back.count} back slats face-screwed onto both raked back posts`));
 
       const steps = [
-        'Cut the two ply A-frame sides (seatD x seatH) and the full run of slats.',
+        'Cut the two ply A-frame sides (seatD x seatH), the two raked back posts, and the full run of slats.',
         midBearers > 0
           ? `Fit ${midBearers} mid bearer(s) across the width to stop the long seat sagging.`
           : 'Seat span is short enough that no mid bearer is needed.',
         'Stand the frames parallel, seatD apart; lay the seat slats with slatField spacing.',
         `Screw the seat slats down across the whole length at a ${seat.gap} mm gap.`,
-        `Pre-set the ${recline}° back lean and screw the back slats bottom to top.`,
+        `Lap a raked back post onto each A-frame's rear edge at the ${recline}° lean, lapping ` +
+          '~140 mm down so the back is triangulated into the seat frame.',
+        'Screw the back slats across both posts, bottom to top — every slat lands on both posts.',
         'Lie in it: head should land on the back, knees fall naturally — adjust nothing if so.',
       ];
       const notes = [
@@ -256,6 +311,9 @@ export const LOUNGE = [
         `Back reclined to ${p.backAngle}° from the seat (${recline}° off vertical) — ` +
           'a deep lie-back angle for a stretched-out lounger, more open than the upright lounge ' +
           `preset's ${ERGO.lounge.backAngle}°.`,
+        'Two raked back posts, one per A-frame, are what the back is built on: they lap ~140 mm ' +
+          'down onto the A-frames (triangulating the leaned back so it stays rigid under a lie-back ' +
+          'load) and every back slat screws across both — no back slat hangs unsupported.',
         `Seat length ${p.seatD} mm wants ${needBearers} bearers total for ${slatStock} ` +
           `(~${beamMaxSpan(slatStock)} mm safe span); ${midBearers} mid bearer(s) added.`,
         'Slats laid with slatField() so the gap stays even regardless of length parameter.',

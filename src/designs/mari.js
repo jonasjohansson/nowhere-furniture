@@ -168,7 +168,10 @@ export const MARI = [
       const plankStock   = 'reglar45x70'; // top planks laid flat (45 tall, 70 wide)
 
       const legW    = SEC(legStock).w;    // 45
-      const footH   = SEC(footStock).h;   // 70 — foot stands on edge
+      // The cross foot is laid flat across the depth (axis 'x'), so its LENGTH is
+      // p.depth and its VERTICAL height is the stock's smaller face dim (w=45) —
+      // NOT section.h (70), which is the foot's horizontal width on the ground.
+      const footVert = SEC(footStock).w;  // 45 — foot's true height off the floor
       const railH   = SEC(railStock).h;   // 45
       const strH    = SEC(stringerStock).h; // 95
       const plankSec= SEC(plankStock);    // {w:45, h:70}
@@ -193,15 +196,17 @@ export const MARI = [
       // Build a leg-frame (cross foot + two legs + under-seat rail) at z.
       const legFrame = (z, name) => {
         const grp = name;
-        // cross foot runs across the depth (x), standing on edge
+        // cross foot runs across the depth (x), lying flat on the ground: it
+        // spans y = 0 .. footVert. Centre it at footVert/2 so it rests on y=0.
         parts.push(beam(`FOOT-${name}`, 'Cross foot', footStock, p.depth, 'x',
-          { x: 0, y: footH / 2, z }, grp));
-        // two legs up from the foot to the underside of the planks
-        const legLen = topUnderside - footH;
+          { x: 0, y: footVert / 2, z }, grp));
+        // two legs land ON the foot top (y=footVert) and run up to the plank
+        // underside, so foot and leg physically meet — no gap, no float.
+        const legLen = topUnderside - footVert;
         for (const s of [-1, 1]) {
           const tag = s < 0 ? 'L' : 'R';
           parts.push(leg(`LEG-${name}${tag}`, legStock, legLen,
-            { x: s * (p.depth / 2 - legW / 2), y: footH + legLen / 2, z }, grp));
+            { x: s * (p.depth / 2 - legW / 2), y: footVert + legLen / 2, z }, grp));
           joints.push(buttJoint(legStock, 2, `leg ${name}${tag} down onto cross foot, 2 screws`));
         }
         // under-seat rail ties the two legs, just below the planks
@@ -248,6 +253,7 @@ export const MARI = [
       const notes = [
         `Span check: bearersFor() asked for ${totalBearers} supports across ${p.len} mm (a ${plankStock} plank is good to ~${beamMaxSpan(plankStock)} mm unsupported), so ${midFrames ? `${midFrames} mid frame(s) were added automatically` : 'the two end frames are enough'}.`,
         'Legs and stringer stand on edge so their depth, not width, carries the load — the bench feels solid, not springy.',
+        `Each leg sits directly on top of its cross foot (foot ${footVert} mm high off the floor, leg landing flush on it) and is Torx-screwed down through the foot — every leg lands on its foot and the foot rests on the ground, nothing hangs in the air.`,
         'The top overhangs the end frames by ~40 mm so knees clear the legs and the structure reads as a clean line.',
         'Outdoor tip: keep the plank gaps at 8-12 mm so water and dust fall through instead of sitting in the seat; the same gaps let the timber dry fast after a desert rain.',
       ];

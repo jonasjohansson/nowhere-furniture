@@ -283,10 +283,14 @@ export const STOOLS = [
       const plankThick = plankSec.h;      // 70 — the plank's VERTICAL dimension
       const plankWidth = plankSec.w;      // 45 — the plank's width across the top
 
-      // The top sits ON the apron base. frameBase builds the base up to apron
-      // top = h; the planks (plankThick tall) sit on that, so the base height is
-      // the finished top height minus the plank thickness.
-      const baseH = p.topH - plankThick;
+      // The top sits ON the apron base. frameBase puts the apron TOP at (h - 10),
+      // not at h, so for the plank underside to land exactly on the apron top —
+      // and the finished top surface to sit at topH — the base height passed to
+      // frameBase must be: apronTop + plankThick = topH, with apronTop = h - 10.
+      //   => h = topH - plankThick + 10
+      // This is what seats the top on the base instead of floating it 10mm clear.
+      const apronTopY = p.topH - plankThick;          // underside-of-planks plane
+      const baseH = apronTopY + 10;                   // frameBase's apronTop = h - 10
 
       const parts = [];
       const joints = [];
@@ -303,22 +307,48 @@ export const STOOLS = [
       parts.push(...base.parts);
       joints.push(...base.joints);       // aprons-into-legs schedule comes baked in
 
+      // --- CROSS-BEARERS: full-width bearers at apron-top level that EVERY plank
+      // rests on. The frame aprons alone don't catch the outermost planks (the
+      // top overhangs the apron rectangle for knee clearance), so the planks must
+      // bear on members that span the WHOLE width. These run along x at apron-top
+      // height (their top flush with the apron top), spaced along the length so no
+      // plank ever spans bearer-to-bearer further than a seat bearer safely can.
+      // The planks (running z) cross every bearer => every plank is supported.
+      // beam() laid along x renders section.w on the vertical (y) axis, so a
+      // 45×95 stick lying flat along x stands bearerSec.w (=45) tall. Seat the
+      // bearer TOP flush with the apron top using its REAL rendered height.
+      const bearerSec = SEC(apronStock);              // {w:45, h:95}
+      const bearerVert = bearerSec.w;                 // vertical dim of a flat x-beam = 45
+      const bearerTopY = apronTopY;                   // flush with the apron top
+      const bearerY = bearerTopY - bearerVert / 2;    // centre of the bearer
+      const bearerLen = p.width;                       // full width — catches all planks
+      // how many bearers: ends sit just inboard of the short-end aprons, plus
+      // enough intermediate bearers that no plank free-spans more than ~600mm.
+      const endInset = SEC(apronStock).w + 20;        // clear the short-end aprons
+      const innerLen = p.len - 2 * endInset;          // clear length between end bearers
+      const nBearers = Math.max(2, Math.ceil(innerLen / 600) + 1);
+      for (let i = 0; i < nBearers; i++) {
+        const z = -innerLen / 2 + (nBearers > 1 ? (innerLen * i) / (nBearers - 1) : 0);
+        parts.push(beam(`BEARER-${i + 1}`, `Cross-bearer ${i + 1}`, apronStock,
+          bearerLen, 'x', { x: 0, y: bearerY, z }, 'Bearers'));
+      }
+      joints.push(buttJoint(apronStock, nBearers * 4,
+        `${nBearers} cross-bearers, 2 screws into each long side apron`));
+
       // --- TOP: a field of planks running the LENGTH (z), spread across WIDTH (x). ---
       // slatField self-spaces n planks across the width to the target gap, so the
-      // top reads like the bench seats. Planks run the full length, resting on the
-      // front/back aprons (which run along x at +/- length-ends? no: aprons "front/
-      // back" in frameBase run along x at z = +/- d/2 — i.e. at the SHORT ends of a
-      // long table — and the side aprons run along z down the long sides). The
-      // length-running planks therefore bear on the two long SIDE aprons.
-      const topY = p.topH - plankThick / 2;          // centre height of the planks
+      // top reads like the bench seats. Planks run the full length and now rest
+      // directly on the full-width cross-bearers (and on the front/back aprons),
+      // their underside on the apron-top plane — the top SITS on the base.
+      const topY = apronTopY + plankThick / 2;        // bottom of planks == apron top
       const field = slatField(p.width, plankWidth, p.gap);
       field.positions.forEach((x, i) => {
         parts.push(beam(`PLANK-${i + 1}`, `Top plank ${i + 1}`, plankStock,
           p.len, 'z', { x, y: topY, z: 0 }, 'Top'));
       });
-      // each plank screwed down into the two long side aprons (2 per apron).
-      joints.push(faceJoint(plankThick, field.count * 4,
-        `${field.count} top planks, 2 screws into each long side apron`));
+      // each plank screwed down into the cross-bearers (2 screws per bearer).
+      joints.push(faceJoint(plankThick, field.count * nBearers,
+        `${field.count} top planks, 2 screws into each of the ${nBearers} cross-bearers`));
 
       // --- LOCATOR CLEATS: keep the lift-off top from sliding, no permanent fix. ---
       // Two cleats screwed across the underside of the plank field, just inside
@@ -326,7 +356,7 @@ export const STOOLS = [
       // This is what makes the top KNOCK-DOWN: no glue, lift it straight up.
       const cleatLen = p.width - 2 * SEC(apronStock).w - 40;
       const cleatH = SEC(cleatStock).h;
-      const cleatY = baseH - cleatH / 2 - 2;          // just under the planks, inside the aprons
+      const cleatY = apronTopY - cleatH / 2;          // hangs just under the planks
       const cleatZ = p.len / 2 - SEC(apronStock).w - 60;
       for (const ze of [-1, 1]) {
         parts.push(cleat(`CLEAT-${ze < 0 ? 'A' : 'B'}`, cleatStock,
@@ -339,28 +369,34 @@ export const STOOLS = [
         `Build the base: cut 4 legs (${legStock}) and 4 aprons (${apronStock}); ` +
           'screw each apron between two legs (2 Torx per end) to make a rigid rectangular base.',
         'Stand the base, check it sits flat and is square across the diagonals.',
+        `Cut and fit ${nBearers} full-width cross-bearers (${apronStock}) between the two long ` +
+          'side aprons, their TOP edge flush with the apron top, evenly along the length — ' +
+          'these are what the whole plank field rests on, including the overhanging outer planks.',
         `Cut ${field.count} top planks to length and lay them face-up with the ${p.gap}mm gaps.`,
         'Screw the two locator cleats across the underside of the plank field, set to drop just ' +
           'inside the short-end aprons — this binds the planks into one liftable mat.',
-        'Drop the plank mat onto the base (cleats locate it between the aprons) and screw down ' +
-          'into the two long side aprons.',
-        'To pack flat: back out the top-to-apron screws, lift the plank mat off, and (if needed) ' +
-          'unscrew the aprons from the legs.',
+        'Drop the plank mat onto the base (it lands on the cross-bearers, cleats locate it ' +
+          'between the aprons) and screw each plank down into every cross-bearer.',
+        'To pack flat: back out the top-to-bearer screws, lift the plank mat off, and (if needed) ' +
+          'unscrew the aprons and bearers from the legs/aprons.',
       ];
       const notes = [
         'frameBase() leg/apron strategy: four corner legs (45×95) tied by four 45×95 aprons ' +
           'set just under the top — the deep aprons triangulate against racking, giving a ' +
           'rigid base with no stretcher in the leg room, so 8–10 people get clear knees.',
+        `The top SITS on the base: ${nBearers} full-width cross-bearers run flush with the apron ` +
+          'top, so every plank — including the two that overhang the apron rectangle for knee ' +
+          'clearance — physically rests on a bearer. Nothing floats; the slab is fully carried.',
         `Seats ~8–10: at ${p.len}mm length that is ~${Math.floor(p.len / 600)} per long side ` +
           'plus one at each end (~600mm of edge per person).',
-        'Knock-down: the plank top lifts straight off (located, not fixed, by two cleats) and the ' +
-          'base breaks down at the apron screws — the table ships flat.',
+        'Knock-down: the plank top lifts straight off (located, not fixed, by two cleats that ' +
+          'drop between the aprons) and the base breaks down at the apron screws — ships flat.',
         'Plank top vs ply: planks chosen so the table reads like the bench seats (same reglar, ' +
           'same self-spaced gaps). Swap to a ply top (ply21, two half-sheets butt-joined over a ' +
-          'mid cleat) for a Judd-matching slab — both rest on the same base.',
-        'Sheet/stick economy: the top is reglar, not sheet, so it costs no plywood; the base is ' +
-          `~${(4 * baseH + 2 * (p.len) + 2 * (p.width)) / 1000 | 0}m of 45×95 reglar (a couple of sticks), ` +
-          'and the whole top is one stick-length class of 45×70 planks.',
+          'mid cleat) for a Judd-matching slab — both rest on the same bearers.',
+        'Sheet/stick economy: the top is reglar, not sheet, so it costs no plywood; the base ' +
+          `plus ${nBearers} bearers are ~${(4 * baseH + 2 * (p.len) + (2 + nBearers) * (p.width)) / 1000 | 0}m ` +
+          'of 45×95 reglar, and the whole top is one stick-length class of 45×70 planks.',
       ];
       return { parts, joints, steps, notes };
     },

@@ -5,6 +5,7 @@ import { Builder } from './builder.js';
 import { CATALOG } from './catalog.js';
 import { computeBOM, bomSummaryLine } from './bom.js';
 import { SHEETS, TIMBER } from './stock.js';
+import { MATERIALS } from './materials.js';
 import {
   bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
@@ -186,6 +187,20 @@ function recomputeBOM() {
 // ---------------------------------------------------------------------------
 // inspector
 // ---------------------------------------------------------------------------
+function buildMaterialSelect() {
+  const sel = $('material-select');
+  const cats = {};
+  for (const m of MATERIALS) (cats[m.category] = cats[m.category] || []).push(m);
+  let html = '<option value="">Auto (by stock)</option>';
+  for (const [cat, list] of Object.entries(cats)) {
+    html += `<optgroup label="${cat}">`;
+    for (const m of list) html += `<option value="${m.id}">${m.name}</option>`;
+    html += '</optgroup>';
+  }
+  sel.innerHTML = html;
+  sel.addEventListener('change', () => builder.setMaterial(sel.value));
+}
+
 function buildStockSelect() {
   const sel = $('i-stock');
   const groups = [['Plywood', SHEETS], ['Reglar', TIMBER]];
@@ -384,5 +399,6 @@ function toast(msg) {
 // boot
 // ---------------------------------------------------------------------------
 buildStockSelect();
+buildMaterialSelect();
 renderCatalog();
 selectDesign('barrio-communal-bench'); // sensible default for a 10-person barrio
