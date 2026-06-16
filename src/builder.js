@@ -26,6 +26,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SHEETS, TIMBER, MM } from './stock.js';
+import { createWoodMaterial, disposeWoodCache } from './wood.js';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -625,12 +626,8 @@ export class Builder {
     for (const tex of this._dimTexCache.values()) tex.dispose();
     this._dimTexCache.clear();
 
-    // Free cached procedural wood base textures.
-    for (const base of this._woodBaseCache.values()) {
-      base.map.dispose();
-      base.rough.dispose();
-    }
-    this._woodBaseCache.clear();
+    // Free cached wood base textures held by the wood module.
+    disposeWoodCache();
 
     this.gizmo.detach();
     this.gizmo.dispose();
@@ -994,98 +991,59 @@ export class Builder {
    * deterministic offset/tint jitter so cloned parts never look identical.
    */
   _applyMaterial(item) {
-    const { color, isSheet } = this._stockInfo(item.spec);
+    const { color } = this._stockInfo(item.spec);
     item.baseColor = color;
-    const seed = item.seed;
-    const rnd = mulberry32(seed);
-
-    const base = this._woodBaseFor(color);
-
-    // Clone the cached textures so we can give this part its own transform
-    // (rotation/offset/repeat) without disturbing other parts sharing the base.
-    const map = base.map.clone();
-    map.needsUpdate = true;
-    const rough = base.rough.clone();
-    rough.needsUpdate = true;
-
-    // Grain runs along texture-U. Map U to the part's LONGEST axis so the grain
-    // visually flows down the length of the board, as real timber would.
     const { w, h, d } = item.spec.size;
     const longest = Math.max(w, h, d);
-    // Texture rotation in 90° steps depending on which face axis is longest.
-    // BoxGeometry UVs map per-face; a single rotation gives a convincing,
-    // cheap "grain follows length" read without per-face UV surgery.
-    let rot = 0;
-    if (longest === h) rot = Math.PI / 2;        // tall part -> grain vertical
-    else if (longest === d) rot = Math.PI / 2;   // deep part -> rotate too
-    map.center.set(0.5, 0.5);
-    rough.center.set(0.5, 0.5);
-    map.rotation = rot;
-    rough.rotation = rot;
+    const longAxis = longest === w ? 'x' : (longest === h ? 'y' : 'z');
 
-    // Repeat so grain density is roughly constant in world space (denser grain
-    // on big panels would look fake). Tie repeats to size in metres.
-    const repU = Math.max(1, (longest * MM) / 0.35);
-    const repV = Math.max(1, (Math.min(w, h, d) * MM) / 0.18 + 1);
-    map.repeat.set(repU, repV);
-    rough.repeat.set(repU, repV);
+    // Hand off to the wood module: it returns authentic per-face grain (long
+    // grain on the 4 sides, end grain on the 2 cut faces) as a 6-material array,
+    // grain oriented along longAxis, with deterministic per-board variation.
+    const mat = createWoodMaterial(THREE, {
+      stockKey: item.spec.stock,
+      baseColor: color,
+      longAxis,
+      sizeMM: { w, h, d },
+      seed: String(item.seed),
+      environment: this.scene.environment,
+    });
 
-    // Deterministic per-part offset jitter -> different slice of the grain.
-    const offU = rnd();
-    const offV = rnd();
-    map.offset.set(offU, offV);
-    rough.offset.set(offU, offV);
-
-    const m = item.mesh.material;
-    // Dispose any previously-assigned cloned maps before replacing them.
-    if (m.map && m.map !== map) m.map.dispose();
-    if (m.roughnessMap && m.roughnessMap !== rough) m.roughnessMap.dispose();
-    m.map = map;
-    m.roughnessMap = rough;
-
-    // Per-part tint jitter on TOP of the texture: a small warm hue/lightness
-    // wobble (deterministic) so identical parts read as individual boards.
-    const tint = new THREE.Color(0xffffff);
-    const th = { h: 0, s: 0, l: 0 };
-    tint.getHSL(th);
-    tint.setHSL(
-      (0.07 + (rnd() - 0.5) * 0.01 + 1) % 1, // warm amber tint band
-      0.10 + rnd() * 0.06,
-      0.92 + (rnd() - 0.5) * 0.06
-    );
-    m.color.copy(tint);
-
-    // Sheet plywood reads a touch lighter/cooler & smoother; timber warmer.
-    if (isSheet) {
-      m.color.offsetHSL(0, -0.02, 0.03);
-      m.roughness = 0.62;
-    } else {
-      m.color.offsetHSL(0.004, 0.02, -0.02);
-      m.roughness = 0.74;
-    }
-    m.envMapIntensity = 0.7;
-    m.needsUpdate = true;
+    this._disposeMaterial(item.mesh.material);
+    item.mesh.material = mat;
 
     // Re-apply selection highlight if this is the selected part.
     this._setHighlight(item, this.selectedId === item.id);
   }
 
-  /** Warm emissive lift on the selected part so it reads clearly against the
-   *  richer wood materials, plus a brighter, warmer edge line. */
-  _setHighlight(item, on) {
-    const m = item.mesh.material;
-    if (on) {
-      m.emissive = new THREE.Color(0xc2703d); // warm accent
-      m.emissiveIntensity = 0.22;
-      item.edges.material.color.set(0xc2703d);
-      item.edges.material.opacity = 0.7;
-    } else {
-      m.emissive = new THREE.Color(0x000000);
-      m.emissiveIntensity = 0;
-      item.edges.material.color.set(0x000000);
-      item.edges.material.opacity = 0.18;
+  /** Dispose a material or material-array plus its cloned per-part maps. */
+  _disposeMaterial(mat) {
+    if (!mat) return;
+    const arr = Array.isArray(mat) ? mat : [mat];
+    for (const m of arr) {
+      if (!m) continue;
+      if (m.map) m.map.dispose();
+      if (m.normalMap) m.normalMap.dispose();
+      if (m.roughnessMap) m.roughnessMap.dispose();
+      m.dispose();
     }
-    m.needsUpdate = true;
+  }
+
+  /** Warm emissive lift on the selected part so it reads clearly against the
+   *  richer wood materials, plus a brighter, warmer edge line. Works whether the
+   *  part carries a single material or a 6-face array. */
+  _setHighlight(item, on) {
+    const arr = Array.isArray(item.mesh.material) ? item.mesh.material : [item.mesh.material];
+    for (const m of arr) {
+      if (!m) continue;
+      m.emissive = new THREE.Color(on ? 0xc2703d : 0x000000);
+      m.emissiveIntensity = on ? 0.22 : 0;
+      m.needsUpdate = true;
+    }
+    if (item.edges) {
+      item.edges.material.color.set(on ? 0xc2703d : 0x000000);
+      item.edges.material.opacity = on ? 0.7 : 0.18;
+    }
   }
 
   // --- transforms: spec <-> mesh ----------------------------------------
@@ -1295,13 +1253,7 @@ export class Builder {
       item.edges.material.dispose();
     }
     mesh.geometry.dispose();
-    if (mesh.material) {
-      // Per-part cloned wood maps must be disposed individually (the BASE maps
-      // live in _woodBaseCache and are freed in dispose()).
-      if (mesh.material.map) mesh.material.map.dispose();
-      if (mesh.material.roughnessMap) mesh.material.roughnessMap.dispose();
-      mesh.material.dispose();
-    }
+    this._disposeMaterial(mesh.material);
   }
 
   _resize() {

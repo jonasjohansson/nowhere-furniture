@@ -1,0 +1,757 @@
+// ============================================================================
+// wood.js — AUTHENTIC PROCEDURAL WOOD MATERIAL FACTORY
+//
+// Builds top-quality MeshStandardMaterial(s) for the box "parts" the furniture
+// builder renders. Real-timber goals, all implemented below:
+//   - grain runs ALONG the board's length axis
+//   - soft growth-ring bands (earlywood lighter, latewood darker/redder)
+//   - occasional knots + cathedral arches
+//   - fine pores, warm color, subtle board-to-board variation
+//   - END-GRAIN (concentric rings) on the two cut ends
+//
+// Public API (called once per part by the builder):
+//   createWoodMaterial(THREE, opts) -> MeshStandardMaterial | Material[6]
+//   disposeWoodCache()              -> free module-cached base textures
+//
+// Determinism: NO Math.random / Date.now anywhere. All variation flows from a
+// seeded mulberry32 PRNG over a string hash of `seed`.
+//
+// Performance: heavy canvas synthesis is done ONCE per (tint, quantized-axis)
+// and cached at module scope. Per call we CLONE the cheap GPU texture wrapper
+// and set rotation / repeat / offset / colorSpace — so ~150 parts is a handful
+// of canvas draws, not 150. The caller owns (and disposes) the clones + the
+// material it receives; disposeWoodCache() frees the shared base textures.
+//
+// All dimensions are millimetres (mm). World/grain density is computed in mm so
+// grain looks the same regardless of part size.
+// ============================================================================
+
+import { SHEETS, TIMBER } from './stock.js';
+
+// ----------------------------------------------------------------------------
+// Tunables
+// ----------------------------------------------------------------------------
+const TEX = 1024;               // base canvas resolution (square)
+const END_TEX = 512;            // end-grain canvas resolution (square)
+const GRAIN_PERIOD_MM = 320;    // world length (mm) covered by one albedo tile
+                                // along the grain -> sets long-grain density
+const CROSS_PERIOD_MM = 150;    // world length (mm) across the board per tile
+const RING_PERIOD_MM = 7;       // growth-ring spacing target on end grain (mm)
+const NORMAL_STRENGTH = 0.55;   // low-moderate; grooves catch raking light
+const FALLBACK_COLOR = 0xc9a063;// warm pine if stockKey unknown / no color
+
+// ----------------------------------------------------------------------------
+// Module cache: cacheKey -> { albedo, normal, rough, end:{albedo,normal,rough} }
+// where each entry holds the raw HTMLCanvasElement-backed CanvasTextures we
+// clone from. Keyed by quantized tint so similar boards share work.
+// ----------------------------------------------------------------------------
+const _cache = new Map();
+
+// ----------------------------------------------------------------------------
+// Deterministic helpers — pure, Node-checkable.
+// ----------------------------------------------------------------------------
+
+/** FNV-1a-ish 32-bit string hash. Stable, no randomness. */
+function hashString(str) {
+  const s = String(str);
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** mulberry32 — small fast seeded PRNG. Returns a function -> [0,1). */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** clamp helper */
+function clamp(x, lo, hi) { return x < lo ? lo : x > hi ? hi : x; }
+
+/** smoothstep */
+function smoothstep(e0, e1, x) {
+  const t = clamp((x - e0) / (e1 - e0 || 1e-6), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Value noise in 1D with smooth interpolation. Deterministic given `seed`.
+ * Used for grain waviness — cheap and tileable-ish for our purposes.
+ */
+function makeValueNoise1D(seed) {
+  // 256 lattice points, hashed from seed.
+  const N = 256;
+  const tbl = new Float32Array(N);
+  const r = mulberry32(seed);
+  for (let i = 0; i < N; i++) tbl[i] = r();
+  return function (x) {
+    const xi = Math.floor(x);
+    const f = x - xi;
+    const a = tbl[((xi % N) + N) % N];
+    const b = tbl[(((xi + 1) % N) + N) % N];
+    return a + (b - a) * smoothstep(0, 1, f);
+  };
+}
+
+/**
+ * Fractal Brownian Motion over a 1D value-noise basis. Returns value in ~[-1,1].
+ * Adds the "FBM jitter" the grain striations need so they're not ruler-straight.
+ */
+function makeFbm1D(seed, octaves = 4) {
+  const noises = [];
+  for (let o = 0; o < octaves; o++) noises.push(makeValueNoise1D(seed + o * 1013));
+  return function (x) {
+    let amp = 0.5, freq = 1, sum = 0, norm = 0;
+    for (let o = 0; o < octaves; o++) {
+      sum += amp * (noises[o](x * freq) * 2 - 1);
+      norm += amp;
+      amp *= 0.5;
+      freq *= 2.03;
+    }
+    return sum / (norm || 1);
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Colour helpers (operate on plain {r,g,b} in 0..255, sRGB-ish authoring space)
+// ----------------------------------------------------------------------------
+
+function hexToRgb(hex) {
+  const n = (hex | 0) >>> 0;
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0; const l = (max + min) / 2;
+  const d = max - min;
+  if (d > 1e-6) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+  }
+  return { h, s, l };
+}
+
+function hue2rgb(p, q, t) {
+  if (t < 0) t += 1;
+  if (t > 1) t -= 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 1 / 2) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 1) + 1) % 1;
+  s = clamp(s, 0, 1); l = clamp(l, 0, 1);
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+}
+
+/**
+ * Push an arbitrary base colour toward a believable warm-timber hue: amber/
+ * golden, never grey/neon. Returns the anchor {h,s,l} for the wood field.
+ */
+function timberHsl(baseColor) {
+  const { r, g, b } = hexToRgb(baseColor);
+  const hsl = rgbToHsl(r, g, b);
+  // Pull hue firmly into the warm amber band (~0.06..0.11 of the wheel =
+  // orange/gold). Keep a little source character so different stocks still
+  // differ, but only when the source is already warm-ish — a cool/grey/neon
+  // input must not produce green/blue "wood". We measure how warm the source
+  // hue is (distance to the amber anchor on the wheel) and fade its influence.
+  const amber = 0.085;
+  let dh = hsl.h - amber;
+  dh -= Math.round(dh); // wrap to [-0.5, 0.5]
+  const warmth = Math.max(0, 1 - Math.abs(dh) / 0.12); // 1 near amber -> 0 far
+  hsl.h = amber + dh * 0.3 * warmth;
+  // Guarantee warmth + life: floor saturation, keep it light but not washed.
+  hsl.s = clamp(hsl.s * 0.6 + 0.32, 0.28, 0.6);
+  hsl.l = clamp(hsl.l * 0.85 + 0.18, 0.42, 0.7);
+  return hsl;
+}
+
+// ----------------------------------------------------------------------------
+// Stock lookup -> a base tint, robust on unknown keys.
+// ----------------------------------------------------------------------------
+
+function resolveTint(stockKey, baseColor) {
+  if (typeof baseColor === 'number' && isFinite(baseColor)) return baseColor >>> 0;
+  const rec = (SHEETS && SHEETS[stockKey]) || (TIMBER && TIMBER[stockKey]) || null;
+  if (rec && typeof rec.color === 'number') return rec.color >>> 0;
+  return FALLBACK_COLOR;
+}
+
+/** Quantize a hex colour to keep the cache small (similar boards share base). */
+function quantizeTint(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const q = (v) => (v >> 4) << 4; // 16 levels per channel
+  return ((q(r) << 16) | (q(g) << 8) | q(b)) >>> 0;
+}
+
+// ----------------------------------------------------------------------------
+// Canvas synthesis — LONG GRAIN (albedo + height -> normal + roughness)
+//
+// Convention: U (canvas X) runs ALONG the grain (board length). V (canvas Y)
+// runs ACROSS the board. The caller rotates the texture so U lands on the part's
+// world long axis.
+// ----------------------------------------------------------------------------
+
+/**
+ * Build the three long-grain canvases. Returns { albedo, normal, rough } as
+ * HTMLCanvasElement. Pure-deterministic given (tintHex, seed).
+ */
+function buildLongGrainCanvases(tintHex, seed) {
+  const W = TEX, H = TEX;
+  const albedo = makeCanvas(W, H);
+  const aCtx = albedo.getContext('2d');
+  const aImg = aCtx.createImageData(W, H);
+  const aData = aImg.data;
+
+  // Height field captured alongside albedo so normal/rough derive from the SAME
+  // grain — striations, rings, knots all push the surface consistently.
+  const height = new Float32Array(W * H);
+
+  const anchor = timberHsl(tintHex);
+
+  const r = mulberry32(seed);
+  // Per-board variation: hue/value shift, ring phase + frequency, grain offset.
+  const hueShift = (r() - 0.5) * 0.02;
+  const lightShift = (r() - 0.5) * 0.06;
+  const ringPhase = r() * Math.PI * 2;
+  const ringFreqJitter = 0.8 + r() * 0.5;     // 0.8..1.3 x nominal
+  const redden = 0.04 + r() * 0.05;           // latewood redder/darker amount
+
+  // FBM fields:
+  const grainWave = makeFbm1D(seed ^ 0x9e3779b9, 4); // gentle waviness of fibre
+  const ringFbm = makeFbm1D(seed ^ 0x85ebca6b, 3);   // ring band irregularity
+  const blotchFbm = makeFbm1D(seed ^ 0xc2b2ae35, 2); // large-scale blotch (V)
+  const blotchFbmU = makeFbm1D(seed ^ 0x27d4eb2f, 2);
+
+  // Growth-ring band frequency: a few bands across the canvas height.
+  const ringBands = (5 + Math.floor(r() * 4)) * ringFreqJitter;
+
+  // Fine striation frequency along V (each board-cross unit has many fibres).
+  const striationFreq = 70 + Math.floor(r() * 60);
+
+  // Knots: 0..2, placed deterministically.
+  const knots = [];
+  const nKnots = r() < 0.55 ? (r() < 0.5 ? 1 : 2) : 0;
+  for (let k = 0; k < nKnots; k++) {
+    knots.push({
+      cx: 0.1 + r() * 0.8,
+      cy: 0.12 + r() * 0.76,
+      rad: 0.018 + r() * 0.03,
+      ramp: 0.05 + r() * 0.05,    // halo of swept grain around it
+      dark: 0.28 + r() * 0.18,    // how dark the core is
+    });
+  }
+
+  // Cathedral arch (flat-sawn) presence: 0..1 arches across the board.
+  const hasArch = r() < 0.6;
+  const archCenterV = 0.2 + r() * 0.6;
+  const archAmp = 0.12 + r() * 0.14;
+  const archFreq = 1 + r() * 1.5;
+
+  for (let y = 0; y < H; y++) {
+    const v = y / H;             // across board, 0..1
+    // Blotch is mostly a function of V with a little U drift -> long soft cloud.
+    for (let x = 0; x < W; x++) {
+      const u = x / W;           // along grain, 0..1
+
+      // --- waviness: displace the V coordinate used for rings/striations so
+      // grain isn't ruler-straight. Low-freq sinusoid + FBM jitter along U.
+      const wave =
+        Math.sin(u * Math.PI * 2 * 1.5 + ringPhase) * 0.012 +
+        grainWave(u * 3.0) * 0.03;
+      const vv = v + wave;
+
+      // --- cathedral arch: bends the ring coordinate near the board centre
+      // into nested U-shapes, the classic flat-sawn figure.
+      let archBend = 0;
+      if (hasArch) {
+        const dz = (vv - archCenterV);
+        archBend = Math.cos(u * Math.PI * 2 * archFreq) * archAmp *
+                   Math.exp(-(dz * dz) / 0.04);
+      }
+      const ringCoord = (vv + archBend) * ringBands + ringFbm(u * 1.4) * 0.4;
+
+      // --- growth ring band: sharp-ish transition earlywood->latewood. Use a
+      // skewed wave so latewood (dark band) is narrower than earlywood.
+      const ringPhaseF = ringCoord * Math.PI * 2;
+      let ring = Math.sin(ringPhaseF);
+      // bias toward latewood being a thin dark line:
+      ring = Math.sign(ring) * Math.pow(Math.abs(ring), 0.6);
+      const late = smoothstep(0.2, 0.95, ring); // 0 earlywood .. 1 latewood
+
+      // --- fine striations along the grain: many thin darker fibre lines.
+      const striY = vv * striationFreq + grainWave(u * 8.0) * 0.8;
+      const stri = Math.abs(Math.sin(striY * Math.PI));
+      const striMark = Math.pow(stri, 6) * 0.10; // dark thin lines
+
+      // --- pores: fine speckle, denser in latewood (open-grain look).
+      const poreN = makeHashNoise(x, y, seed);
+      const pore = (poreN > 0.93 ? (poreN - 0.93) / 0.07 : 0) * (0.4 + 0.6 * late);
+      const poreMark = pore * 0.10;
+
+      // --- large blotch: gentle lightness cloud.
+      const blotch = (blotchFbm(v * 2.2) * 0.5 + blotchFbmU(u * 1.3) * 0.5) * 0.05;
+
+      // --- assemble HSL for this texel from the anchor.
+      let hh = anchor.h + hueShift;
+      let ss = anchor.s;
+      let ll = anchor.l + lightShift + blotch;
+
+      // Latewood: darker + redder (shift hue slightly toward red, drop L, +S).
+      ll -= late * 0.14;
+      ss += late * 0.10;
+      hh -= late * redden;       // toward red end of the warm band
+
+      // Striations + pores darken locally.
+      ll -= striMark + poreMark;
+
+      // --- knots: dark cores with a swirling, locally-darker halo.
+      let knotHeight = 0;
+      for (let ki = 0; ki < knots.length; ki++) {
+        const kt = knots[ki];
+        const du = u - kt.cx, dv = v - kt.cy;
+        const dist = Math.sqrt(du * du + dv * dv);
+        if (dist < kt.rad + kt.ramp) {
+          const core = 1 - smoothstep(0, kt.rad, dist);
+          const halo = 1 - smoothstep(kt.rad, kt.rad + kt.ramp, dist);
+          // concentric darkening inside the knot
+          const rings = 0.5 + 0.5 * Math.sin(dist / Math.max(kt.rad, 1e-4) * 18);
+          ll -= core * kt.dark + halo * 0.05 * rings;
+          ss += core * 0.12;
+          hh -= core * 0.02;
+          knotHeight -= core * 0.6 + halo * 0.1;
+        }
+      }
+
+      const rgb = hslToRgb(hh, ss, ll);
+      const idx = (y * W + x) * 4;
+      aData[idx] = rgb.r;
+      aData[idx + 1] = rgb.g;
+      aData[idx + 2] = rgb.b;
+      aData[idx + 3] = 255;
+
+      // Height: latewood + striations + pores sit slightly LOWER (grooves);
+      // knots pull down hard. Range roughly [-1, 0.2].
+      height[y * W + x] =
+        -(late * 0.5) - striMark * 3.0 - poreMark * 2.0 + knotHeight;
+    }
+  }
+  aCtx.putImageData(aImg, 0, 0);
+
+  // Derive normal + roughness from the SAME height field.
+  const normal = heightToNormal(height, W, H, NORMAL_STRENGTH);
+  const rough = heightToRoughness(height, W, H, /*base*/ 0.58, /*late*/ null);
+
+  return { albedo, normal, rough };
+}
+
+// ----------------------------------------------------------------------------
+// Canvas synthesis — END GRAIN (concentric growth rings on the cut ends)
+// ----------------------------------------------------------------------------
+
+function buildEndGrainCanvases(tintHex, seed, ringSpacingPx) {
+  const W = END_TEX, H = END_TEX;
+  const albedo = makeCanvas(W, H);
+  const aCtx = albedo.getContext('2d');
+  const aImg = aCtx.createImageData(W, H);
+  const aData = aImg.data;
+  const height = new Float32Array(W * H);
+
+  const anchor = timberHsl(tintHex);
+  const r = mulberry32(seed ^ 0x51ed270b);
+
+  // Pith (ring centre) is usually off-canvas (boards are sawn off-centre), so
+  // rings read as broad arcs. Place it well outside with deterministic jitter.
+  const pithX = (-0.4 + r() * 0.3) * W;        // left of canvas
+  const pithY = (0.3 + r() * 0.4) * H;
+  const hueShift = (r() - 0.5) * 0.02;
+  const lightShift = (r() - 0.5) * 0.05;
+  const ringPx = ringSpacingPx;                 // pixels per growth ring
+  const ringFbm = makeFbm1D(seed ^ 0xa54ff53a, 3);
+  const redden = 0.05 + r() * 0.05;
+
+  // Faint radial ray fleck (medullary rays) emanating from the pith.
+  const rayCount = 30 + Math.floor(r() * 30);
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const dx = x - pithX, dy = y - pithY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const ang = Math.atan2(dy, dx);
+
+      // Rings: distance modulated by FBM so they wobble like real growth.
+      const ringCoord = (dist + ringFbm(ang * 2.5 + dist * 0.01) * ringPx * 0.5) / ringPx;
+      let ring = Math.sin(ringCoord * Math.PI * 2);
+      ring = Math.sign(ring) * Math.pow(Math.abs(ring), 0.6);
+      const late = smoothstep(0.2, 0.95, ring);
+
+      // Radial rays: thin lighter spokes.
+      const ray = Math.pow(Math.abs(Math.sin(ang * rayCount * 0.5)), 14) * 0.05;
+
+      // Fine speckle.
+      const sp = makeHashNoise(x, y, seed ^ 0x1234) > 0.95 ? 0.06 : 0;
+
+      let hh = anchor.h + hueShift;
+      let ss = anchor.s;
+      let ll = anchor.l + lightShift + ray;
+      ll -= late * 0.16 + sp;
+      ss += late * 0.10;
+      hh -= late * redden;
+
+      const rgb = hslToRgb(hh, ss, ll);
+      const idx = (y * W + x) * 4;
+      aData[idx] = rgb.r;
+      aData[idx + 1] = rgb.g;
+      aData[idx + 2] = rgb.b;
+      aData[idx + 3] = 255;
+
+      height[y * W + x] = -(late * 0.5) - sp * 2;
+    }
+  }
+  aCtx.putImageData(aImg, 0, 0);
+
+  const normal = heightToNormal(height, W, H, NORMAL_STRENGTH * 0.8);
+  const rough = heightToRoughness(height, W, H, 0.6, null);
+  return { albedo, normal, rough };
+}
+
+// ----------------------------------------------------------------------------
+// Height -> normal / roughness derivation (shared)
+// ----------------------------------------------------------------------------
+
+/** Sobel-ish height -> tangent-space normal map canvas. */
+function heightToNormal(height, W, H, strength) {
+  const canvas = makeCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  const at = (x, y) => height[((y + H) % H) * W + ((x + W) % W)];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const hl = at(x - 1, y), hr = at(x + 1, y);
+      const hu = at(x, y - 1), hd = at(x, y + 1);
+      // gradient -> normal. Scale by strength.
+      let nx = (hl - hr) * strength * 4;
+      let ny = (hu - hd) * strength * 4;
+      let nz = 1.0;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= len; ny /= len; nz /= len;
+      const idx = (y * W + x) * 4;
+      d[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+      d[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      d[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      d[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+/**
+ * Height -> roughness map. Oiled-wood semi-matte: grooves (lower height =
+ * latewood/grain/pores) read slightly ROUGHER than the smoother earlywood.
+ */
+function heightToRoughness(height, W, H, base) {
+  const canvas = makeCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  for (let i = 0; i < W * H; i++) {
+    // height roughly [-2, 0.2]; lower -> rougher. Map to ~0.5..0.7.
+    const hgt = clamp(height[i], -1.2, 0.2);
+    const rough = clamp(base + (-hgt) * 0.12, 0.46, 0.72);
+    const g = Math.round(rough * 255);
+    const idx = i * 4;
+    d[idx] = g; d[idx + 1] = g; d[idx + 2] = g; d[idx + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+// ----------------------------------------------------------------------------
+// Tiny utilities
+// ----------------------------------------------------------------------------
+
+/** Hash-based white-ish noise in [0,1) from integer pixel coords. Deterministic. */
+function makeHashNoise(x, y, seed) {
+  let h = (x * 374761393 + y * 668265263 + seed * 2654435761) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return (h >>> 0) / 4294967296;
+}
+
+/** Create a canvas in browser or a stub in non-DOM (Node) so module parses. */
+function makeCanvas(w, h) {
+  if (typeof document !== 'undefined' && document.createElement) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+  // Headless fallback (e.g. OffscreenCanvas) — never hit in Node --check.
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
+  throw new Error('wood.js: no canvas available in this environment');
+}
+
+// ----------------------------------------------------------------------------
+// Texture wrapping for THREE — turn a base canvas into a configured clone.
+// ----------------------------------------------------------------------------
+
+function makeBaseTexture(THREE, canvas, colorSpace) {
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = colorSpace;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Get (and cache) the base textures for a tint. We build the CanvasTextures
+ * once; per-part we clone them and stamp rotation/repeat/offset. Returns:
+ *   { long: {albedo,normal,rough}, end: {albedo,normal,rough} }
+ */
+function getBaseTextures(THREE, tintHex, seed) {
+  const qTint = quantizeTint(tintHex);
+  const key = `${qTint}`;
+  let entry = _cache.get(key);
+  if (entry) return entry;
+
+  // Use a tint-derived seed so the cached base is stable per tint (per-board
+  // jitter is applied later via clone transforms + material.color, not here —
+  // so two boards of the same stock can share this expensive base).
+  const baseSeed = hashString(`wood|${qTint}`);
+
+  const lg = buildLongGrainCanvases(tintHex, baseSeed);
+  const ringSpacingPx = clamp(
+    (RING_PERIOD_MM / CROSS_PERIOD_MM) * END_TEX, 6, END_TEX / 4
+  );
+  const eg = buildEndGrainCanvases(tintHex, baseSeed, ringSpacingPx);
+
+  entry = {
+    long: {
+      albedo: makeBaseTexture(THREE, lg.albedo, THREE.SRGBColorSpace),
+      normal: makeBaseTexture(THREE, lg.normal, THREE.LinearSRGBColorSpace),
+      rough: makeBaseTexture(THREE, lg.rough, THREE.LinearSRGBColorSpace),
+    },
+    end: {
+      albedo: makeBaseTexture(THREE, eg.albedo, THREE.SRGBColorSpace),
+      normal: makeBaseTexture(THREE, eg.normal, THREE.LinearSRGBColorSpace),
+      rough: makeBaseTexture(THREE, eg.rough, THREE.LinearSRGBColorSpace),
+    },
+  };
+  _cache.set(key, entry);
+  return entry;
+}
+
+// ----------------------------------------------------------------------------
+// Per-part configuration of cloned textures.
+// ----------------------------------------------------------------------------
+
+/**
+ * Clone a base texture and stamp colorSpace/wrap + a transform. `rot` is the
+ * rotation (radians) so texture-U lands along the desired world axis; repU/repV
+ * the world-space-constant repeats; off the per-board offset.
+ */
+function cloneTex(base, rot, repU, repV, offU, offV) {
+  const t = base.clone();
+  t.wrapS = base.wrapS;
+  t.wrapT = base.wrapT;
+  t.colorSpace = base.colorSpace;
+  t.anisotropy = base.anisotropy;
+  t.center.set(0.5, 0.5);
+  t.rotation = rot;
+  t.repeat.set(repU, repV);
+  t.offset.set(offU, offV);
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
+ * Build ONE MeshStandardMaterial for a given face role.
+ *   role 'long'  -> long-grain face. `rot` orients U along the board length.
+ *   role 'end'   -> end-grain face (concentric rings).
+ */
+function makeFaceMaterial(THREE, base, role, cfg) {
+  const set = role === 'end' ? base.end : base.long;
+  const map = cloneTex(set.albedo, cfg.rot, cfg.repU, cfg.repV, cfg.offU, cfg.offV);
+  const normalMap = cloneTex(set.normal, cfg.rot, cfg.repU, cfg.repV, cfg.offU, cfg.offV);
+  const roughnessMap = cloneTex(set.rough, cfg.rot, cfg.repU, cfg.repV, cfg.offU, cfg.offV);
+
+  const m = new THREE.MeshStandardMaterial({
+    map,
+    normalMap,
+    roughnessMap,
+    color: cfg.tint,
+    roughness: 1.0,          // modulated by roughnessMap (greyscale ~0.5..0.7)
+    metalness: 0.0,
+    envMap: cfg.environment || null,
+    envMapIntensity: 0.7,
+  });
+  if (m.normalScale && m.normalScale.set) m.normalScale.set(0.8, 0.8);
+  return m;
+}
+
+// ----------------------------------------------------------------------------
+// PUBLIC API
+// ----------------------------------------------------------------------------
+
+/**
+ * Create wood material(s) for one part.
+ *
+ * @param {object} THREE  the three.js module (r160)
+ * @param {object} opts   see file header / task spec
+ * @returns {THREE.MeshStandardMaterial | THREE.Material[]}  a 6-length array for
+ *          BoxGeometry (preferred — end grain on the cut ends) keyed in
+ *          BoxGeometry group order [+x,-x,+y,-y,+z,-z]; or a single material as
+ *          a robust fallback.
+ */
+export function createWoodMaterial(THREE, opts) {
+  const o = opts || {};
+  const tint = resolveTint(o.stockKey, o.baseColor);
+  const seedStr = (o.seed == null ? 'wood' : String(o.seed));
+  const seed = hashString(seedStr);
+  const rnd = mulberry32(seed);
+
+  // --- per-board variation (deterministic) -------------------------------
+  // Small warm hue/value shift expressed as a multiplicative material.color so
+  // identical parts read as individual boards on top of the shared base texture.
+  const vH = (rnd() - 0.5) * 0.012;            // tiny hue wobble
+  const vL = 0.94 + (rnd() - 0.5) * 0.10;      // lightness multiplier on white
+  const vS = (rnd() - 0.5) * 0.03;
+  const tintColor = new THREE.Color();
+  {
+    // anchor near white so it tints rather than recolours the texture
+    const hsl = rgbToHsl(255, 255, 255);
+    const rgb = hslToRgb(0.085 + vH, clamp(0.04 + vS, 0, 0.12), clamp(vL, 0.7, 1));
+    tintColor.setRGB(rgb.r / 255, rgb.g / 255, rgb.b / 255);
+    void hsl;
+  }
+  const offU = rnd();   // grain slice offset
+  const offV = rnd();
+
+  // --- size + axis -> repeats & rotation ---------------------------------
+  const size = o.sizeMM || {};
+  const w = Math.max(1, +size.w || 1);
+  const h = Math.max(1, +size.h || 1);
+  const d = Math.max(1, +size.d || 1);
+  let longAxis = o.longAxis;
+  if (longAxis !== 'x' && longAxis !== 'y' && longAxis !== 'z') {
+    // Fallback: infer from the largest dimension.
+    longAxis = (w >= h && w >= d) ? 'x' : (h >= d ? 'y' : 'z');
+  }
+  const lenMM = longAxis === 'x' ? w : longAxis === 'y' ? h : d;
+
+  const base = getBaseTextures(THREE, tint, seed);
+
+  // Repeats so density is constant in world space. Long axis -> grain density;
+  // the cross axis sets how many "boards-worth" of cross figure show.
+  const repAlong = (axisLenMM) => clamp(axisLenMM / GRAIN_PERIOD_MM, 0.25, 12);
+  const repAcross = (axisLenMM) => clamp(axisLenMM / CROSS_PERIOD_MM, 0.25, 12);
+
+  // For BoxGeometry, each face's local UV: U follows the face's first in-plane
+  // axis, V the second. We orient each long-grain face so its U runs along the
+  // world long axis by choosing rotation in 90° steps; and set repeats from the
+  // two in-plane dims of that face.
+  //
+  // Face -> (in-plane axes) for BoxGeometry:
+  //   +x,-x : plane (z, y)   normal x
+  //   +y,-y : plane (x, z)   normal y
+  //   +z,-z : plane (x, y)   normal z
+  // On a face, default texture U maps to the FIRST listed axis, V to the second.
+  const facePlane = {
+    px: ['z', 'y'], nx: ['z', 'y'],
+    py: ['x', 'z'], ny: ['x', 'z'],
+    pz: ['x', 'y'], nz: ['x', 'y'],
+  };
+  const dimOf = { x: w, y: h, z: d };
+
+  // For a long-grain face we want texture-U along `longAxis`. If the face's
+  // first in-plane axis IS longAxis -> rot 0. If the second is -> rot 90°.
+  function longCfg(faceKey) {
+    const [a0, a1] = facePlane[faceKey];
+    let rot, alongAxis, acrossAxis;
+    if (a0 === longAxis) { rot = 0; alongAxis = a0; acrossAxis = a1; }
+    else { rot = Math.PI / 2; alongAxis = a1; acrossAxis = a0; }
+    const repU = repAlong(dimOf[alongAxis]);
+    const repV = repAcross(dimOf[acrossAxis]);
+    return { rot, repU, repV, offU, offV, tint: tintColor, environment: o.environment };
+  }
+
+  // End-grain face: square-ish ring texture, repeats from the two cross dims.
+  function endCfg(faceKey) {
+    const [a0, a1] = facePlane[faceKey];
+    const repU = repAcross(dimOf[a0]);
+    const repV = repAcross(dimOf[a1]);
+    return { rot: 0, repU, repV, offU, offV, tint: tintColor, environment: o.environment };
+  }
+
+  // Which two faces are the cut ends? The faces whose NORMAL is the long axis.
+  // +x,-x normal x ; +y,-y normal y ; +z,-z normal z.
+  const endByAxis = { x: ['px', 'nx'], y: ['py', 'ny'], z: ['pz', 'nz'] };
+  const endFaces = endByAxis[longAxis];
+
+  // Build the 6-material array in BoxGeometry group order: +x,-x,+y,-y,+z,-z.
+  const order = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
+  try {
+    const mats = order.map((faceKey) => {
+      const isEnd = endFaces.indexOf(faceKey) !== -1;
+      return isEnd
+        ? makeFaceMaterial(THREE, base, 'end', endCfg(faceKey))
+        : makeFaceMaterial(THREE, base, 'long', longCfg(faceKey));
+    });
+    return mats;
+  } catch (err) {
+    // Robust fallback: a single long-grain material if anything degenerate.
+    void err;
+    return makeFaceMaterial(THREE, base, 'long', {
+      rot: 0,
+      repU: repAlong(lenMM),
+      repV: repAcross(Math.min(w, h, d)),
+      offU, offV, tint: tintColor, environment: o.environment,
+    });
+  }
+}
+
+/**
+ * Dispose all module-cached base textures. Call on teardown / hot-reload. The
+ * caller is responsible for disposing the per-part cloned textures + materials
+ * it received from createWoodMaterial.
+ */
+export function disposeWoodCache() {
+  for (const entry of _cache.values()) {
+    for (const group of [entry.long, entry.end]) {
+      if (!group) continue;
+      for (const k of ['albedo', 'normal', 'rough']) {
+        const t = group[k];
+        if (t && typeof t.dispose === 'function') t.dispose();
+      }
+    }
+  }
+  _cache.clear();
+}
