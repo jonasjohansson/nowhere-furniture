@@ -43,9 +43,8 @@ export const INTERLOCK = [
     buildTime: '45–60 min',
     params: [
       { key: 'seatH', label: 'Seat height', min: 360, max: 520, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
-      { key: 'len',   label: 'Top width',   min: 400, max: 900, step: 20, default: 600, unit: 'mm' },
+      { key: 'len',   label: 'Top width (tabs = ¼)', min: 400, max: 900, step: 20, default: 600, unit: 'mm' },
       { key: 'depth', label: 'Top depth',   min: 220, max: 500, step: 10, default: 300, unit: 'mm' },
-      { key: 'tabW',  label: 'Tab width',   min: 60,  max: 260, step: 10, default: 150, unit: 'mm' },
       { key: 'tabD',  label: 'Tab depth',   min: 18,  max: 60,  step: 2,  default: 18,  unit: 'mm' },
       { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 6, step: 1, default: 1, unit: '' },
     ],
@@ -60,16 +59,15 @@ export const INTERLOCK = [
       const legH    = seatTop;                  // leg top flush with the surface
       const legY    = legH / 2;
 
-      // Tabs/legs are fully settable: width along the edge = p.tabW, thickness
-      // front-to-back = p.tabD. Laid out TAB-GAP-TAB-GAP from the front (leg, gap,
-      // leg, gap). The side-by-side 180°-rotated interlock is EXACT when tab width
-      // = gap = top width / 4 (e.g. top 600 -> tabs 150); other tab widths still
-      // build, the neighbour just meets them a little off.
+      // Tab WIDTH is relational: always 1/4 of the top width, so tab = gap and the
+      // side-by-side 180°-rotated interlock always meshes (top 600 -> tabs 150).
+      // Laid out TAB-GAP-TAB-GAP from the front (leg at segment 1 flush with the
+      // end + segment 3). Tab DEPTH (z thickness) is the free control, p.tabD.
       const legThk = Math.max(12, p.tabD || 18);            // leg thickness (z)
       const legZ   = hz + legThk / 2;                       // leg flanks the long edge
-      const legW   = Math.min(p.tabW, p.len / 2 - 10);      // tab width (clamped to fit two)
-      const gap    = Math.max(0, (p.len - 2 * legW) / 2);   // gap between the two tabs
-      const legXs  = [-p.len / 2 + legW / 2, -p.len / 2 + 1.5 * legW + gap];
+      const legW   = p.len / 4;                             // tab width = 25% of top width
+      const gap    = p.len / 4;                             // tab = gap → interlock meshes
+      const legXs  = [-3 * p.len / 8, p.len / 8];           // segment-1 (front) and segment-3 centres
 
       const aprH    = 80;
       const aprY    = (seatTop - topThk) - aprH / 2;
