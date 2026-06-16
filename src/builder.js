@@ -27,10 +27,10 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js?v=11';
-import { disposeWoodCache } from './wood.js?v=11';
-import { materialMaterial } from './materials.js?v=11';
-import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=11';
+import { SHEETS, TIMBER, MM } from './stock.js?v=13';
+import { disposeWoodCache } from './wood.js?v=13';
+import { materialMaterial } from './materials.js?v=13';
+import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=13';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -562,6 +562,14 @@ export class Builder {
     const spec = this._cloneSpec(cur.spec);
     spec.ref = spec.ref ? `${spec.ref}'` : undefined;
     spec.pos = { x: spec.pos.x + 100, y: spec.pos.y, z: spec.pos.z + 100 };
+    // If the part carries an accent colour, rotate its hue so each copy reads as
+    // a distinct tone (golden-angle shift).
+    if (spec.color != null) {
+      const c = new THREE.Color(spec.color);
+      const hsl = {}; c.getHSL(hsl);
+      c.setHSL((hsl.h + 0.618) % 1, hsl.s, hsl.l);
+      spec.color = c.getHex();
+    }
     const item = this._buildPart(spec);
     this.select(item.id);
     this._pushHistory(); // HISTORY PUSH: after committed duplicate
@@ -1097,7 +1105,7 @@ export class Builder {
       const tint = new THREE.Color(item.spec.color);
       const arr = Array.isArray(mat) ? mat : [mat];
       for (const m of arr) {
-        m.color.lerp(tint, 0.5); // blend halfway toward the accent hue
+        m.color.lerp(tint, 0.62); // blend toward the accent hue (strong enough to read on dark wood)
         m.needsUpdate = true;
       }
     }

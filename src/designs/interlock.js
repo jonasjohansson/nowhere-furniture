@@ -19,7 +19,7 @@ import {
   ERGO, panel,
   faceJoint, panelEdgeJoint,
   SHEETS,
-} from '../engineering.js?v=11';
+} from '../engineering.js?v=13';
 
 const PLY = (key) => SHEETS[key].thickness;   // sheet thickness in mm
 
@@ -112,10 +112,34 @@ export const INTERLOCK = [
       // unit's top — plus any extra user gap between units.
       const pitch = p.depth + legThk + Math.max(0, p.gap || 0);
       const z0    = -((units - 1) * pitch) / 2;
+
+      // Colour the top, legs and rails distinctly so they're easy to read apart,
+      // and give every repeated unit its OWN hue (golden-angle rotation = a
+      // tasteful, well-spread set of stained-wood tones). Deterministic, so the
+      // build stays pure but a bench reads as a colourful row.
+      const hsl = (h, s, l) => {
+        const a = s * Math.min(l, 1 - l);
+        const f = (n) => { const m = (n + h * 12) % 12; return l - a * Math.max(-1, Math.min(m - 3, Math.min(9 - m, 1))); };
+        return (Math.round(f(0) * 255) << 16) | (Math.round(f(8) * 255) << 8) | Math.round(f(4) * 255);
+      };
+      // One hue per unit (golden-angle spread → a clean, well-separated set of
+      // tones across a row). Within a unit the TOP is the lightest, the LEGS are
+      // darker + more saturated, and the cross-rail sits between — so top vs legs
+      // read clearly apart while each stool stays a single harmonious colour.
+      const unitColors = (k) => {
+        const hue = (0.05 + k * 0.618) % 1;            // distinct hue per unit
+        return {
+          'Top board':  hsl(hue, 0.50, 0.62),          // lightest, most colourful
+          'Board leg':  hsl(hue, 0.58, 0.40),          // darker + saturated → clear contrast
+          'Cross rail': hsl(hue, 0.46, 0.50),          // mid
+        };
+      };
+
       const parts = [];
       for (let k = 0; k < units; k++) {
         const flip = (k % 2) === 1;          // alternate 180° rotation
         const oz   = z0 + k * pitch;
+        const cols = unitColors(k);
         for (const part of base) {
           parts.push({
             ...part,
@@ -124,6 +148,7 @@ export const INTERLOCK = [
             pos: { x: flip ? -part.pos.x : part.pos.x, y: part.pos.y,
                    z: (flip ? -part.pos.z : part.pos.z) + oz },
             rot: { x: 0, y: flip ? 180 : 0, z: 0 },
+            color: cols[part.name] ?? part.color,
           });
         }
       }
