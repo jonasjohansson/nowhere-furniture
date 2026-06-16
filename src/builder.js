@@ -130,9 +130,9 @@ export class Builder {
 
     // ---- scene -----------------------------------------------------------
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xe9e2d4); // warm sand (matches the UI)
-    // Soft desert haze — fades the far ground into the sand background for depth.
-    this.scene.fog = new THREE.Fog(0xe9e2d4, 5, 20);
+    this.scene.background = new THREE.Color(0xd9bd95); // warm sand-dusk (until the HDRI sky lands)
+    // Soft desert haze — fades the far ground into the warm horizon for depth.
+    this.scene.fog = new THREE.Fog(0xcaa472, 6, 26);
 
     // ---- camera ----------------------------------------------------------
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -170,7 +170,12 @@ export class Builder {
       this._envRT = rt;
       this.scene.environment = rt.texture;
       this.scene.environmentIntensity = 1.0;
-      hdr.dispose();
+      // Show the warm dusk sky itself as a softly-blurred desert backdrop — the
+      // baseline env above means the wood is already lit, so this swap is smooth.
+      this.scene.background = hdr;
+      this.scene.backgroundBlurriness = 0.6;
+      this.scene.backgroundIntensity = 1.0;
+      this._hdrTex = hdr;
       for (const item of this.items.values()) this._applyMaterial(item);
     }, undefined, () => { /* keep the baseline env + sand background on failure */ });
 
