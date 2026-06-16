@@ -154,7 +154,7 @@ export class Builder {
       // lights the ground + wood to a cool white wash (the old RoomEnvironment was
       // baked dim at 0.04). Low intensity = soft realistic reflections while the
       // warm directional + hemisphere rig stays the main light.
-      this.scene.environmentIntensity = 0.28;
+      this.scene.environmentIntensity = 1.0;
       // NB: we DON'T set scene.background to the HDRI — the warm sand background
       // (set above) stays, so there's no jarring sky pop-in and the viewport reads
       // cohesively with the minimal desert UI. The HDRI only lights the wood.
@@ -164,12 +164,12 @@ export class Builder {
 
     // ---- lighting --------------------------------------------------------
     // Hemisphere for soft warm ambient (sky warm-white, ground a muted sand).
-    const hemi = new THREE.HemisphereLight(0xfff3e0, 0xbfa988, 0.55);
+    const hemi = new THREE.HemisphereLight(0xfff3e0, 0xbfa988, 0.12);
     this.scene.add(hemi);
     this.hemiLight = hemi;
 
     // Key directional light — soft PCF shadows, warm daylight colour.
-    const dir = new THREE.DirectionalLight(0xfff4e2, 1.55);
+    const dir = new THREE.DirectionalLight(0xfff4e2, 0.75);
     dir.position.set(3, 5, 2);
     dir.castShadow = true;
     dir.shadow.mapSize.set(2048, 2048);
@@ -187,13 +187,13 @@ export class Builder {
 
     // Cool-ish fill from the opposite side to lift the shadow side without
     // killing form.
-    const fill = new THREE.DirectionalLight(0xeaf0ff, 0.28);
+    const fill = new THREE.DirectionalLight(0xeaf0ff, 0.0);
     fill.position.set(-2.5, 2, -3);
     this.scene.add(fill);
     this.fillLight = fill;
 
     // Subtle warm rim from low-behind for a little edge glow / separation.
-    const rim = new THREE.DirectionalLight(0xffd9a8, 0.35);
+    const rim = new THREE.DirectionalLight(0xffd9a8, 0.2);
     rim.position.set(-1, 1.2, -4);
     this.scene.add(rim);
     this.rimLight = rim;

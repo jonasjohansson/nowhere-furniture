@@ -20,14 +20,18 @@
 html, body { margin: 0; height: 100%; overflow: hidden; color: var(--ink);
   font-family: var(--font);
   background: linear-gradient(180deg, var(--bg-hi), var(--bg)); }
-#app { display: flex; height: 100vh; }
+#app { position: relative; height: 100vh; overflow: hidden; }
 
-/* columns — no fills, just a hairline between */
-#left, #right { width: 280px; flex: 0 0 auto; overflow-y: auto; background: var(--panel); }
-#left { border-right: 1px solid var(--line); }
-#right { border-left: 1px solid var(--line); }
-#stage { flex: 1; position: relative; min-width: 0; }
+/* The 3D scene fills the whole viewport; the panels FLOAT over it as translucent
+   frosted glass, so the warm desert light glows through the interface. */
+#stage { position: absolute; inset: 0; z-index: 0; }
 #canvas { position: absolute; inset: 0; overflow: hidden; }
+#left, #right { position: absolute; top: 0; bottom: 0; width: 280px; z-index: 2; overflow-y: auto;
+  background: rgba(233, 226, 212, 0.6);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15); }
+#left { left: 0; border-right: 1px solid rgba(214, 204, 184, 0.7); }
+#right { right: 0; border-left: 1px solid rgba(214, 204, 184, 0.7); }
 /* renderer sets the drawing-buffer but skips CSS size — force the canvas to fill
    its box so a retina display doesn't overflow the layout. */
 #canvas canvas { display: block; width: 100% !important; height: 100% !important; }
