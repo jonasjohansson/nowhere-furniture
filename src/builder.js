@@ -27,10 +27,10 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js?v=10';
-import { disposeWoodCache } from './wood.js?v=10';
-import { materialMaterial } from './materials.js?v=10';
-import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=10';
+import { SHEETS, TIMBER, MM } from './stock.js?v=11';
+import { disposeWoodCache } from './wood.js?v=11';
+import { materialMaterial } from './materials.js?v=11';
+import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=11';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -1082,6 +1082,13 @@ export class Builder {
 
     this._disposeMaterial(item.mesh.material);
     item.mesh.material = mat;
+
+    // Keep the wood MATTE — the overcast desert sky was reflecting in it and
+    // reading glossy/plasticky. Low envMapIntensity = soft diffuse timber.
+    for (const m of (Array.isArray(mat) ? mat : [mat])) {
+      m.envMapIntensity = 0.28;
+      m.needsUpdate = true;
+    }
 
     // Per-part hue accent: when the spec sets an explicit colour (e.g. the
     // interlocking tabs), nudge the material's hue toward it — warmer/deeper —

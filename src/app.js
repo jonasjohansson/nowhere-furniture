@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=10';
-import { CATALOG } from './catalog.js?v=10';
-import { computeBOM, bomSummaryLine } from './bom.js?v=10';
-import { SHEETS, TIMBER } from './stock.js?v=10';
-import { MATERIALS } from './materials.js?v=10';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=10';
+import { Builder } from './builder.js?v=11';
+import { CATALOG } from './catalog.js?v=11';
+import { computeBOM, bomSummaryLine } from './bom.js?v=11';
+import { SHEETS, TIMBER } from './stock.js?v=11';
+import { MATERIALS } from './materials.js?v=11';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=11';
 import {
   bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=10';
+} from './export.js?v=11';
 
 const $ = (id) => document.getElementById(id);
 
@@ -76,14 +76,14 @@ function renderBuildInfo(build) {
   if (!build) { el.innerHTML = ''; return; }
   let html = '';
   if (build.steps && build.steps.length) {
-    html += `<details class="bi"><summary>${t('asmSteps')}</summary><ol>`;
+    html += `<div class="bi"><h4>${t('asmSteps')}</h4><ol>`;
     for (const s of build.steps) html += `<li>${s}</li>`;
-    html += '</ol></details>';
+    html += '</ol></div>';
   }
   if (build.notes && build.notes.length) {
-    html += `<details class="bi"><summary>${t('engNotes')}</summary><ul>`;
+    html += `<div class="bi"><h4>${t('engNotes')}</h4><ul>`;
     for (const n of build.notes) html += `<li>${n}</li>`;
-    html += '</ul></details>';
+    html += '</ul></div>';
   }
   el.innerHTML = html;
 }
