@@ -26,9 +26,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js';
-import { disposeWoodCache } from './wood.js';
-import { materialMaterial, defaultMaterialForStock } from './materials.js';
+import { SHEETS, TIMBER, MM } from './stock.js?v=8';
+import { disposeWoodCache } from './wood.js?v=8';
+import { materialMaterial, defaultMaterialForStock } from './materials.js?v=8';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -221,9 +221,10 @@ export class Builder {
     // pure shadow catcher, to read as a real warm surface under the pieces.
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 40),
-      new THREE.MeshStandardMaterial({
-        color: 0xe3dac6, roughness: 0.96, metalness: 0.0,
-      })
+      // A pure shadow CATCHER — invisible except where the furniture's shadow
+      // falls — so there's no flat pale "floor" washing the view. The pieces sit
+      // in the warm dusk haze with just a soft shadow beneath.
+      new THREE.ShadowMaterial({ opacity: 0.16, color: 0x3a2f22 })
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = 0;
@@ -251,14 +252,9 @@ export class Builder {
     this.contactShadow = contact;
     this._contactTex = contactTex;
 
-    // Metric grid: 0.1 m minor cells, coarser major lines — kept quiet so it
-    // reads as a measuring aid, not decoration.
-    const grid = new THREE.GridHelper(8, 80, 0xcabf9f, 0xe6dcc4);
-    grid.position.y = 0.0016; // above contact shadow, avoid z-fighting
-    grid.material.transparent = true;
-    grid.material.opacity = 0.5;
-    this.grid = grid;
-    this.scene.add(grid);
+    // No visible CAD grid — snapping still works without it. The furniture reads
+    // as a clean object in the desert haze, not on a measured floor.
+    this.grid = null;
 
     // ---- orbit controls --------------------------------------------------
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
@@ -668,8 +664,7 @@ export class Builder {
     this.gizmo.dispose();
     this.orbit.dispose();
 
-    this.grid.geometry.dispose();
-    this.grid.material.dispose();
+    if (this.grid) { this.grid.geometry.dispose(); this.grid.material.dispose(); }
     this.ground.geometry.dispose();
     this.ground.material.dispose();
     this.contactShadow.geometry.dispose();

@@ -29,7 +29,7 @@
 
 import {
   ERGO, beam, plank, leg, buttJoint, faceJoint, SHEETS, TIMBER,
-} from '../engineering.js';
+} from '../engineering.js?v=8';
 
 const SEC = (key) => TIMBER[key].section;
 const D2R = (d) => (d * Math.PI) / 180;
