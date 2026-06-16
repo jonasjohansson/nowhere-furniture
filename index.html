@@ -20,16 +20,17 @@
   <!-- LEFT: catalog ---------------------------------------------------------->
   <aside id="left">
     <div class="brand">
+      <button id="lang-toggle" title="Català / English">CA</button>
       Nowhere Furniture
-      <span>Enzo Mari &amp; the honest-plank school · metric · Torx</span>
+      <span data-i18n="tagline">Enzo Mari &amp; the honest-plank school · metric · Torx</span>
     </div>
     <div class="section">
-      <h2>Catalog</h2>
+      <h2 data-i18n="catalog">Catalog</h2>
       <div id="catalog-list"></div>
     </div>
     <div class="section">
-      <h2>About</h2>
-      <p class="muted small">
+      <h2 data-i18n="about">About</h2>
+      <p class="muted small" data-i18n="aboutText">
         Burner-friendly outdoor furniture from two materials only — plywood
         sheet + reglar timber — screwed together with Torx. Pick a design,
         tune it, read off the full bill of materials, export the cut sheets.
@@ -41,27 +42,27 @@
   <main id="stage">
     <div id="toolbar">
       <div class="group">
-        <button data-act="move" class="active" title="Move (W)">↔ Move</button>
-        <button data-act="rotate" title="Rotate (E)">⟳ Rotate</button>
+        <button data-act="move" class="active" title="Move (W)" data-i18n="tbMove">↔ Move</button>
+        <button data-act="rotate" title="Rotate (E)" data-i18n="tbRotate">⟳ Rotate</button>
       </div>
       <div class="group">
-        <button data-act="snap" class="active" title="Snap (S)">⊞ Snap</button>
-        <button data-act="dims" title="Dimensions (M)">⊹ Dims</button>
+        <button data-act="snap" class="active" title="Snap (S)" data-i18n="tbSnap">⊞ Snap</button>
+        <button data-act="dims" title="Dimensions (M)" data-i18n="tbDims">⊹ Dims</button>
       </div>
       <div class="group">
-        <button data-act="add-sheet">+ Sheet</button>
-        <button data-act="add-timber">+ Reglar</button>
+        <button data-act="add-sheet" data-i18n="tbSheet">+ Sheet</button>
+        <button data-act="add-timber" data-i18n="tbReglar">+ Reglar</button>
       </div>
       <div class="group">
-        <button data-act="undo" title="Undo (⌘Z)" disabled>↺ Undo</button>
-        <button data-act="redo" title="Redo (⌘⇧Z)" disabled>↻ Redo</button>
+        <button data-act="undo" title="Undo (⌘Z)" data-i18n="tbUndo" disabled>↺ Undo</button>
+        <button data-act="redo" title="Redo (⌘⇧Z)" data-i18n="tbRedo" disabled>↻ Redo</button>
       </div>
       <div class="group">
-        <button data-act="duplicate" title="Duplicate (D)">⧉ Duplicate</button>
-        <button data-act="delete" title="Delete (Del)">🗑 Delete</button>
+        <button data-act="duplicate" title="Duplicate (D)" data-i18n="tbDuplicate">⧉ Duplicate</button>
+        <button data-act="delete" title="Delete (Del)" data-i18n="tbDelete">🗑 Delete</button>
       </div>
       <div class="group">
-        <button data-act="frame" title="Fit view (F)">⤢ Fit</button>
+        <button data-act="frame" title="Fit view (F)" data-i18n="tbFit">⤢ Fit</button>
       </div>
     </div>
     <div id="canvas"></div>
@@ -71,44 +72,44 @@
   <!-- RIGHT: panels ----------------------------------------------------------->
   <aside id="right">
     <div class="section" id="design-section">
-      <h2>Design</h2>
+      <h2 data-i18n="design">Design</h2>
       <div id="design-head"></div>
       <div id="params"></div>
       <div id="buildinfo"></div>
       <div class="field" style="margin-top:12px">
-        <label>Material</label>
+        <label data-i18n="material">Material</label>
         <select id="material-select"></select>
       </div>
     </div>
 
     <div class="section" id="inspect-section">
-      <h2>Selected part</h2>
-      <div id="inspect-empty" class="muted small">Click a part to edit it.</div>
+      <h2 data-i18n="selectedPart">Selected part</h2>
+      <div id="inspect-empty" class="muted small" data-i18n="clickPart">Click a part to edit it.</div>
       <div id="inspect-body" hidden>
-        <div class="field"><label>Name</label><input id="i-name" type="text" /></div>
-        <div class="field"><label>Stock</label><select id="i-stock"></select></div>
-        <div class="field"><label>Width</label><input id="i-w" type="number" step="1" /><span class="u">mm</span></div>
-        <div class="field"><label>Height</label><input id="i-h" type="number" step="1" /><span class="u">mm</span></div>
-        <div class="field"><label>Depth</label><input id="i-d" type="number" step="1" /><span class="u">mm</span></div>
+        <div class="field"><label data-i18n="fName">Name</label><input id="i-name" type="text" /></div>
+        <div class="field"><label data-i18n="fStock">Stock</label><select id="i-stock"></select></div>
+        <div class="field"><label data-i18n="fWidth">Width</label><input id="i-w" type="number" step="1" /><span class="u">mm</span></div>
+        <div class="field"><label data-i18n="fHeight">Height</label><input id="i-h" type="number" step="1" /><span class="u">mm</span></div>
+        <div class="field"><label data-i18n="fDepth">Depth</label><input id="i-d" type="number" step="1" /><span class="u">mm</span></div>
       </div>
     </div>
 
     <div class="section" id="bom-section">
-      <h2>Bill of materials</h2>
+      <h2 data-i18n="bom">Bill of materials</h2>
       <div id="bom-summary" class="muted small"></div>
       <div id="bom"></div>
     </div>
 
     <div class="section">
-      <h2>Export</h2>
+      <h2 data-i18n="export">Export</h2>
       <div class="btn-grid">
-        <button data-exp="print">🖨 Print BOM</button>
-        <button data-exp="bom-csv">BOM .csv</button>
-        <button data-exp="parts-csv">Cut list .csv</button>
-        <button data-exp="cutsheet">Cut sheets .svg</button>
-        <button data-exp="elevations">Elevations .svg</button>
-        <button data-exp="save">Save .json</button>
-        <button data-exp="load">Load .json</button>
+        <button data-exp="print" data-i18n="expPrint">🖨 Print BOM</button>
+        <button data-exp="bom-csv" data-i18n="expBomCsv">BOM .csv</button>
+        <button data-exp="parts-csv" data-i18n="expCutCsv">Cut list .csv</button>
+        <button data-exp="cutsheet" data-i18n="expCutSheet">Cut sheets .svg</button>
+        <button data-exp="elevations" data-i18n="expElev">Elevations .svg</button>
+        <button data-exp="save" data-i18n="expSave">Save .json</button>
+        <button data-exp="load" data-i18n="expLoad">Load .json</button>
       </div>
       <input id="file-input" type="file" accept="application/json" hidden />
     </div>

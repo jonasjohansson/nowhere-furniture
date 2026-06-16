@@ -6,6 +6,7 @@ import { CATALOG } from './catalog.js';
 import { computeBOM, bomSummaryLine } from './bom.js';
 import { SHEETS, TIMBER } from './stock.js';
 import { MATERIALS } from './materials.js';
+import { t, getLang, setLang, applyStatic } from './i18n.js';
 import {
   bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
@@ -62,7 +63,7 @@ function selectDesign(id) {
 function renderDesignHead() {
   const d = currentDesign;
   if (!d) { $('design-head').innerHTML = ''; return; }
-  const badges = [d.difficulty, d.buildTime].filter(Boolean)
+  const badges = [d.difficulty ? t(d.difficulty) : null, d.buildTime].filter(Boolean)
     .map((b) => `<span class="badge">${b}</span>`).join('');
   $('design-head').innerHTML =
     `<b>${d.name}</b><div class="by">${d.designer}${d.year ? ' · ' + d.year : ''}</div>
@@ -75,12 +76,12 @@ function renderBuildInfo(build) {
   if (!build) { el.innerHTML = ''; return; }
   let html = '';
   if (build.steps && build.steps.length) {
-    html += '<details class="bi"><summary>Assembly steps</summary><ol>';
+    html += `<details class="bi"><summary>${t('asmSteps')}</summary><ol>`;
     for (const s of build.steps) html += `<li>${s}</li>`;
     html += '</ol></details>';
   }
   if (build.notes && build.notes.length) {
-    html += '<details class="bi"><summary>Engineering notes</summary><ul>';
+    html += `<details class="bi"><summary>${t('engNotes')}</summary><ul>`;
     for (const n of build.notes) html += `<li>${n}</li>`;
     html += '</ul></details>';
   }
@@ -144,40 +145,48 @@ function fmtSEK(n) {
   return Math.round(n || 0).toLocaleString('sv-SE').replace(/ /g, ' ') + ' kr';
 }
 
+function localizedSummary(bom) {
+  const sheets = bom.sheets.reduce((s, r) => s + r.sheetsNeeded, 0);
+  const m = bom.totals.timberLengthM;
+  const screws = bom.totals.screwCount;
+  return `${sheets} ${t(sheets === 1 ? 'sSheet' : 'sSheets')} · ${m} m ${t('sReglar')} · ` +
+         `${screws} ${t('sScrews')} · ~${fmtSEK(bom.totals.grandCost)}`;
+}
+
 function recomputeBOM() {
   const bom = currentBOM();
-  $('bom-summary').textContent = bomSummaryLine(bom);
+  $('bom-summary').textContent = localizedSummary(bom);
   const out = [];
 
   if (bom.sheets.length) {
-    out.push('<h3>Plywood</h3><table>');
+    out.push(`<h3>${t('bPlywood')}</h3><table>`);
     for (const r of bom.sheets) {
-      out.push(`<tr><td>${r.label} <span class="sub">×${r.sheetsNeeded} sheet${r.sheetsNeeded > 1 ? 's' : ''}</span>
-        <div class="sub">${r.partsCount} parts · ${Math.round((r.utilisation || 0) * 100)}% used</div></td>
+      out.push(`<tr><td>${r.label} <span class="sub">×${r.sheetsNeeded} ${t(r.sheetsNeeded > 1 ? 'bSheets' : 'bSheet')}</span>
+        <div class="sub">${r.partsCount} ${t('bParts')} · ${Math.round((r.utilisation || 0) * 100)}% ${t('bUsed')}</div></td>
         <td class="r">${fmtSEK(r.lineTotal)}</td></tr>`);
     }
     out.push('</table>');
   }
   if (bom.timber.length) {
-    out.push('<h3>Reglar (timber)</h3><table>');
+    out.push(`<h3>${t('bReglar')}</h3><table>`);
     for (const r of bom.timber) {
       const sticks = (r.sticks || []).map((s) => `${s.count}×${s.length}`).join(', ');
       out.push(`<tr><td>${r.label} <span class="sub">${sticks}</span>
-        <div class="sub">${r.totalLengthM} m needed</div></td>
+        <div class="sub">${r.totalLengthM} m ${t('bNeeded')}</div></td>
         <td class="r">${fmtSEK(r.lineTotal)}</td></tr>`);
     }
     out.push('</table>');
   }
   if (bom.screws.length) {
-    out.push('<h3>Torx screws</h3><table>');
+    out.push(`<h3>${t('bScrews')}</h3><table>`);
     for (const r of bom.screws) {
-      out.push(`<tr><td>${r.label} <span class="sub">×${r.count} (${r.boxes} box${r.boxes > 1 ? 'es' : ''})</span></td>
+      out.push(`<tr><td>${r.label} <span class="sub">×${r.count} (${r.boxes} ${t(r.boxes > 1 ? 'bBoxes' : 'bBox')})</span></td>
         <td class="r">${fmtSEK(r.lineTotal)}</td></tr>`);
     }
     out.push('</table>');
   }
 
-  out.push(`<div class="grand"><span>Total</span><span>${fmtSEK(bom.totals.grandCost)}</span></div>`);
+  out.push(`<div class="grand"><span>${t('bTotal')}</span><span>${fmtSEK(bom.totals.grandCost)}</span></div>`);
   if (bom.warnings && bom.warnings.length)
     out.push(`<div class="warn">⚠ ${bom.warnings.join('<br>⚠ ')}</div>`);
 
@@ -191,7 +200,7 @@ function buildMaterialSelect() {
   const sel = $('material-select');
   const cats = {};
   for (const m of MATERIALS) (cats[m.category] = cats[m.category] || []).push(m);
-  let html = '<option value="">Auto (by stock)</option>';
+  let html = `<option value="">${t('matAuto')}</option>`;
   for (const [cat, list] of Object.entries(cats)) {
     html += `<optgroup label="${cat}">`;
     for (const m of list) html += `<option value="${m.id}">${m.name}</option>`;
@@ -401,4 +410,21 @@ function toast(msg) {
 buildStockSelect();
 buildMaterialSelect();
 renderCatalog();
-selectDesign('barrio-communal-bench'); // sensible default for a 10-person barrio
+selectDesign('board-stool'); // the featured design, pinned to the top of the catalog
+
+// --- language (English / Catalan) ------------------------------------------
+function refreshLang() {
+  applyStatic();
+  $('lang-toggle').textContent = getLang() === 'en' ? 'CA' : 'EN';
+  const autoOpt = $('material-select').querySelector('option[value=""]');
+  if (autoOpt) autoOpt.textContent = t('matAuto');
+  if (currentDesign) { renderDesignHead(); renderBuildInfo(currentBuild); }
+  recomputeBOM();
+  renderInspector(builder.getSelected());
+}
+$('lang-toggle').addEventListener('click', () => {
+  setLang(getLang() === 'en' ? 'ca' : 'en');
+  refreshLang();
+});
+applyStatic();
+$('lang-toggle').textContent = getLang() === 'en' ? 'CA' : 'EN';
