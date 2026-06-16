@@ -73,12 +73,12 @@ export const INTERLOCK = [
       const legH   = seatTop;                  // full height: leg top flush with the surface
       const legY   = legH / 2;
 
-      // Aprons run along x in each leg plane, just under the top, tying the two
-      // legs of that side together and giving the top a bearing edge.
-      const aprH    = 80;                                  // apron board height
-      const aprTopY = seatTop - topThk;                    // apron top under the board
+      // Cross-rails sit BETWEEN the legs, UNDERNEATH the top: each spans the depth
+      // between the front+back leg at one end, tying the two sides together. The
+      // top rests on the two rails.
+      const aprH    = 80;                                  // rail board height
+      const aprTopY = seatTop - topThk;                    // rail top under the board
       const aprY    = aprTopY - aprH / 2;
-      const aprLen  = 2 * legX - legW;                   // inner face to inner face of the two legs
 
       const parts = [];
       const joints = [];
@@ -87,33 +87,37 @@ export const INTERLOCK = [
       parts.push(panel('TOP', 'Top board', topStock, p.len, p.depth, 'xz',
         { x: 0, y: topY, z: 0 }, 'Top'));
 
-      // FOUR VERTICAL BOARD-LEGS — two per long side, near the ends.
+      // FOUR VERTICAL BOARD-LEGS — flanking the long edges, near each end.
       for (const sz of [-1, 1]) {
         for (const sx of [-1, 1]) {
           const tag = `LEG-${sz < 0 ? 'B' : 'F'}${sx < 0 ? 'L' : 'R'}`;
           parts.push(panel(tag, 'Board leg', legStock, legW, legH, 'xy',
             { x: sx * legX, y: legY, z: sz * legZ }, 'Legs'));
-          joints.push(faceJoint(legThk, 3, 'leg screwed to the top edge + the side apron'));
+          joints.push(faceJoint(legThk, 3, 'leg screwed to the top edge + the end cross-rail'));
         }
-        // SIDE APRON — connects the two legs on this side, under the top.
-        const tag = `APRON-${sz < 0 ? 'B' : 'F'}`;
-        parts.push(panel(tag, 'Side apron', aprStock, aprLen, aprH, 'xy',
-          { x: 0, y: aprY, z: sz * legZ }, 'Aprons'));
-        joints.push(faceJoint(aprThk, 4, 'apron screwed into the two legs, 2 per end'));
       }
-      // Top screwed down onto the two aprons.
-      joints.push(panelEdgeJoint(topStock, 2 * p.len, 200, 'top board screwed down to both aprons'));
+
+      // TWO END CROSS-RAILS — between the front+back legs at each end, underneath.
+      const railLen = p.depth;                             // between the long-edge leg inner faces
+      for (const sx of [-1, 1]) {
+        const tag = `RAIL-${sx < 0 ? 'L' : 'R'}`;
+        parts.push(panel(tag, 'Cross rail', aprStock, railLen, aprH, 'zy',
+          { x: sx * legX, y: aprY, z: 0 }, 'Cross rails'));
+        joints.push(faceJoint(aprThk, 4, 'cross-rail screwed into the front + back legs, 2 per end'));
+      }
+      // Top screwed down onto the two cross-rails.
+      joints.push(panelEdgeJoint(topStock, 2 * p.depth, 200, 'top board screwed down to both cross-rails'));
 
       const steps = [
-        `Cut from one ply18 sheet: 1 top board (${p.len}×${p.depth}), 4 board-legs (${legW}×${legH}), 2 side aprons (${aprLen}×${aprH}).`,
-        'Make the two side frames: stand two legs and screw a side apron between them just below where the top will sit (apron top = top-board underside). Two identical ⊓-frames.',
-        'Stand the two side frames the top depth apart and drop the top board between them so its long edges land against the leg inner faces, flush with the leg tops.',
-        'Screw through each leg into the top edge (3 per leg) and down through the top into both aprons — all screws from outside, Mari-style.',
+        `Cut from one ply18 sheet: 1 top board (${p.len}×${p.depth}), 4 board-legs (${legW}×${legH}), 2 cross-rails (${railLen}×${aprH}).`,
+        'Make the two END frames: stand the front + back leg of one end and screw a cross-rail BETWEEN them just under where the top will sit. Two identical end frames.',
+        'Stand the two end frames the top length apart and drop the top board on so it rests on both cross-rails, its long edges flush with the leg outer faces.',
+        'Screw through each leg into the top edge (3 per leg) and down through the top into both cross-rails — all screws from outside, Mari-style.',
         'Check it sits flat and rock-test; ease the sharp top edges. Oil for outdoor use.',
       ];
       const notes = [
-        'Four flat board-legs flanking the top, tied by the two aprons, make a rigid torsion box — no wobble, no separate stretcher needed at this size.',
-        'All one ply18 sheet: top + 4 legs + 2 aprons nest from a single sheet with little waste.',
+        'Two end frames (each = two legs + a cross-rail between them) tied by the top board make a rigid box — the cross-rails stop the legs splaying.',
+        'All one ply18 sheet: top + 4 legs + 2 cross-rails nest from a single sheet with little waste.',
         'Light enough to move but a gust can still walk it — weight it or peg a foot in open desert wind.',
       ];
 
