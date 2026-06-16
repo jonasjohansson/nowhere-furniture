@@ -43,9 +43,9 @@ export const INTERLOCK = [
     buildTime: '45–60 min',
     params: [
       { key: 'seatH', label: 'Seat height', min: 420, max: 460, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
-      { key: 'len',   label: 'Top length',  min: 440, max: 760, step: 20, default: 600, unit: 'mm' },
-      { key: 'depth', label: 'Top depth',   min: 220, max: 360, step: 10, default: 300, unit: 'mm' },
-      { key: 'units', label: 'Units (rotated bench)', min: 1, max: 5, step: 1, default: 1, unit: '' },
+      { key: 'len',   label: 'Top width (legs = ¼)', min: 400, max: 800, step: 20, default: 600, unit: 'mm' },
+      { key: 'depth', label: 'Top depth',   min: 220, max: 400, step: 10, default: 300, unit: 'mm' },
+      { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 5, step: 1, default: 1, unit: '' },
     ],
 
     build(p) {
@@ -86,23 +86,25 @@ export const INTERLOCK = [
         return ps;
       }
 
-      // Repeat into a bench: each copy is offset by one top-length along x and
-      // ROTATED 180° about the vertical (the rotation offset the user wants), so
-      // neighbouring tab-gap legs interlock. The whole row is centred on origin.
+      // Repeat into a bench: stack copies SIDE BY SIDE along the depth (z), each
+      // ROTATED 180° about the vertical. Because the tab-gap legs sit on the long
+      // edges, two units placed edge-to-edge in depth interleave their legs — the
+      // tabs of one drop into the gaps of its neighbour. The block is centred on
+      // the origin.
       const units = Math.max(1, Math.round(p.units || 1));
       const base  = baseUnit();
-      const x0    = -((units - 1) * p.len) / 2;
+      const z0    = -((units - 1) * p.depth) / 2;
       const parts = [];
       for (let k = 0; k < units; k++) {
         const flip = (k % 2) === 1;          // alternate 180° rotation
-        const ox   = x0 + k * p.len;
+        const oz   = z0 + k * p.depth;
         for (const part of base) {
           parts.push({
             ...part,
             ref: `U${k + 1}-${part.ref}`,
             size: { ...part.size },
-            pos: { x: (flip ? -part.pos.x : part.pos.x) + ox, y: part.pos.y,
-                   z: flip ? -part.pos.z : part.pos.z },
+            pos: { x: flip ? -part.pos.x : part.pos.x, y: part.pos.y,
+                   z: (flip ? -part.pos.z : part.pos.z) + oz },
             rot: { x: 0, y: flip ? 180 : 0, z: 0 },
           });
         }
