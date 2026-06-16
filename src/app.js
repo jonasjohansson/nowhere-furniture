@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=16';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=16';
-import { computeBOM, bomSummaryLine } from './bom.js?v=16';
-import { SHEETS, TIMBER } from './stock.js?v=16';
-import { MATERIALS } from './materials.js?v=16';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=16';
+import { Builder } from './builder.js?v=19';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=19';
+import { computeBOM, bomSummaryLine } from './bom.js?v=19';
+import { SHEETS, TIMBER } from './stock.js?v=19';
+import { MATERIALS } from './materials.js?v=19';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=19';
 import {
-  bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG, buildExplodedSVG,
+  buildFullDocHTML,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=16';
+} from './export.js?v=19';
 
 const $ = (id) => document.getElementById(id);
 
@@ -376,14 +376,9 @@ $('right').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-exp]'); if (!btn) return;
   const bom = currentBOM();
   switch (btn.dataset.exp) {
-    case 'print':      printHTML(bomToHTML(bom, exportMeta())); break;
-    case 'bom-csv':    downloadFile('nowhere-bom.csv', bomToCSV(bom), 'text/csv'); break;
-    case 'parts-csv':  downloadFile('nowhere-cutlist.csv', partsToCSV(lastParts), 'text/csv'); break;
-    case 'cutsheet':   downloadFile('nowhere-cutsheets.svg', buildCutSheetSVG(bom), 'image/svg+xml'); break;
-    case 'elevations': downloadFile('nowhere-elevations.svg', buildElevationsSVG(lastParts), 'image/svg+xml'); break;
-    case 'exploded':   downloadFile('nowhere-pieces.svg', buildExplodedSVG(lastParts, { steps: currentBuild?.steps, name: currentDesign?.name }), 'image/svg+xml'); break;
-    case 'save':       exportProjectJSON({ design: currentDesign?.id, params: currentParams, parts: lastParts }, 'nowhere-project.json'); break;
-    case 'load':       $('file-input').click(); break;
+    case 'pdf':  printHTML(buildFullDocHTML(bom, { ...exportMeta(), name: currentDesign?.name, steps: currentBuild?.steps })); break;
+    case 'save': exportProjectJSON({ design: currentDesign?.id, params: currentParams, parts: lastParts }, 'nowhere-project.json'); break;
+    case 'load': $('file-input').click(); break;
   }
 });
 

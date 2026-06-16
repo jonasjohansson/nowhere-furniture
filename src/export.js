@@ -31,7 +31,7 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=16';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=19';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities
@@ -669,13 +669,6 @@ function shelfPack(items, sheetSize, minSheets = 1) {
   let cur = [];
   let shelfX = GAP, shelfY = GAP, shelfH = 0;
 
-  function newSheet() {
-    if (cur.length || sheets.length === 0) sheets.push(cur);
-    cur = [];
-    shelfX = GAP; shelfY = GAP; shelfH = 0;
-  }
-  newSheet(); // start sheet 0
-
   for (const it of sorted) {
     // Item larger than a sheet: clamp so it still draws (visual only).
     const w = Math.min(it.w, SW - GAP * 2);
@@ -994,6 +987,180 @@ export function buildExplodedSVG(parts, opts = {}) {
 
   y += MARGIN;
   return svgDoc(PAGE_W, y, body.join('\n'));
+}
+
+// ============================================================================
+// 5c. buildFullDocHTML — ONE print-ready document with everything
+//     (exploded view + cut sheets + shopping list + cut list + screws + cost).
+//     Print it and "Save as PDF" → a single PDF build sheet.
+// ============================================================================
+/**
+ * @param {object} bom  computeBOM() output
+ * @param {{ parts?:PartSpec[], steps?:string[], name?:string, designer?:string, date?:string }} meta
+ * @returns {string} standalone, print-ready HTML document
+ */
+export function buildFullDocHTML(bom, meta = {}) {
+  bom = bom || {};
+  const totals = bom.totals || {};
+  const currency = totals.currency || 'SEK';
+  const name = meta.name || meta.projectName || 'Nowhere build';
+  const date = meta.date || '';
+  const designer = meta.designer || '';
+  const parts = arr(meta.parts);
+
+  // The exploded/pieces/steps drawing, embedded inline (responsive via CSS).
+  const explodedSVG = buildExplodedSVG(parts, { steps: meta.steps, name });
+
+  // Cut-sheet nesting: the BOM's sheet items carry no draw coordinates, so feed
+  // the cut-sheet packer the sheet PARTS directly (broad face w×h) and let it
+  // shelf-pack a real layout across the sheetsNeeded count.
+  const sheetGroups = new Map();
+  for (const p of parts) {
+    if (p.material !== 'sheet') continue;
+    const s = p.size || { w: 0, h: 0, d: 0 };
+    const dims = [round(s.w), round(s.h), round(s.d)].sort((a, b) => b - a);
+    const key = p.stock || '';
+    if (!sheetGroups.has(key)) sheetGroups.set(key, []);
+    sheetGroups.get(key).push({ ref: p.ref || '', name: p.name || '', w: dims[0], h: dims[1] });
+  }
+  const cutSheets = [...sheetGroups.entries()].map(([stock, items]) => {
+    const b = arr(bom.sheets).find((s) => s.stock === stock) || {};
+    const sheetSize = b.sheetSize || (SHEETS[stock] && SHEETS[stock].sheet) || { w: 2440, h: 1220 };
+    return { stock, label: b.label || stockLabel(stock), sheetSize, count: b.sheetsNeeded || 1, items };
+  });
+  const cutSVG = buildCutSheetSVG({ sheets: cutSheets });
+
+  // --- shopping list rows (real bom.js field names) -------------------------
+  const sheetRows = arr(bom.sheets).map((s) => `
+        <tr><td>${esc(s.label || stockLabel(s.stock))}</td>
+          <td class="num">${esc(s.sheetsNeeded != null ? s.sheetsNeeded : '')}</td>
+          <td>${esc(s.sheetSize ? `${round(s.sheetSize.w)}×${round(s.sheetSize.h)} mm` : '2440×1220 mm')}</td>
+          <td class="num">${s.lineTotal != null ? esc(money(s.lineTotal, currency)) : ''}</td></tr>`).join('');
+  const timberRows = arr(bom.timber).map((t) => {
+    const sticks = (t.sticks || []).reduce((n, s) => n + (s.count || 0), 0);
+    const sec = t.section ? `${t.section.w}×${t.section.h} mm` : '';
+    const lenM = t.totalLengthM != null ? `${t.totalLengthM} m` : '';
+    return `
+        <tr><td>${esc(t.label || stockLabel(t.stock))}</td>
+          <td class="num">${esc(sticks || '')}</td>
+          <td>${esc(sec)}${lenM ? ` &middot; ${esc(lenM)} total` : ''}</td>
+          <td class="num">${t.lineTotal != null ? esc(money(t.lineTotal, currency)) : ''}</td></tr>`;
+  }).join('');
+  const screwRows = arr(bom.screws).map((sc) => {
+    const rec = SCREWS[sc.screw] || {};
+    return `
+        <tr><td>${esc(sc.label || sc.screw || '')}</td>
+          <td class="num">${esc(sc.count != null ? sc.count : '')}</td>
+          <td class="num">${esc(sc.boxes != null ? sc.boxes : '')}</td>
+          <td>${esc(rec.drive || '')}</td>
+          <td class="num">${sc.lineTotal != null ? esc(money(sc.lineTotal, currency)) : ''}</td></tr>`;
+  }).join('');
+
+  // --- cut list (grouped identical parts) -----------------------------------
+  const groups = new Map();
+  for (const p of parts) {
+    const s = p.size || { w: 0, h: 0, d: 0 };
+    const key = [p.name || '', p.stock || '', round(s.w), round(s.h), round(s.d)].join('|');
+    let g = groups.get(key);
+    if (!g) { g = { name: p.name || '', material: p.material || '', size: s, qty: 0 }; groups.set(key, g); }
+    g.qty += 1;
+  }
+  const cutRows = [...groups.values()]
+    .sort((a, b) => (a.material === b.material ? 0 : a.material < b.material ? -1 : 1))
+    .map((g) => `
+        <tr><td>${esc(g.name)}</td>
+          <td>${esc(g.material === 'sheet' ? 'Plywood' : g.material === 'timber' ? 'Timber' : g.material)}</td>
+          <td class="num">${esc(fmtSize(g.size))} mm</td>
+          <td class="num">${esc(g.qty)}</td></tr>`).join('');
+
+  const grand = totals.grandCost != null ? totals.grandCost
+    : (totals.sheetCost || 0) + (totals.timberCost || 0) + (totals.screwCost || 0);
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${esc(name)} — Build sheet</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font: 13px/1.45 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { max-width: 860px; margin: 0 auto; padding: 28px 32px 48px; }
+  header.doc { border-bottom: 2px solid #1a1a1a; padding-bottom: 12px; margin-bottom: 18px;
+    display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
+  header.doc h1 { font-size: 22px; margin: 0; }
+  header.doc .meta { color: #666; font-size: 12px; text-align: right; }
+  section { margin: 20px 0; page-break-inside: avoid; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #2b5d8a;
+    border-bottom: 1px solid #d8d8d8; padding-bottom: 4px; margin: 0 0 10px; }
+  .figure svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #e2e2e2; vertical-align: top; }
+  thead th { background: #f6f7f9; font-weight: 600; }
+  tbody tr:nth-child(even) td { background: #f6f7f9; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .totals { display: flex; gap: 24px; flex-wrap: wrap; background: #f6f7f9; border: 1px solid #e2e2e2;
+    border-radius: 6px; padding: 12px 16px; }
+  .totals .item { display: flex; flex-direction: column; }
+  .totals .k { color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .totals .v { font-size: 16px; font-weight: 600; }
+  .totals .grand .v { color: #2b5d8a; }
+  footer.doc { margin-top: 28px; color: #666; font-size: 11px; border-top: 1px solid #d8d8d8; padding-top: 8px; }
+  @page { size: A4; margin: 12mm; }
+  @media print { .page { max-width: none; padding: 0; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="doc">
+    <h1>${esc(name)}</h1>
+    <div class="meta">Build sheet${designer ? `<br>Design: ${esc(designer)}` : ''}${date ? `<br>${esc(date)}` : ''}</div>
+  </header>
+
+  <section class="figure">${explodedSVG}</section>
+
+  <section class="figure"><h2>Cut sheets — plywood nesting</h2>${cutSVG}</section>
+
+  <section>
+    <h2>Shopping list — sheet goods</h2>
+    <table><thead><tr><th>Material</th><th class="num">Sheets</th><th>Sheet size</th><th class="num">Cost</th></tr></thead>
+      <tbody>${sheetRows || `<tr><td colspan="4" style="color:#999">No plywood needed.</td></tr>`}</tbody></table>
+  </section>
+
+  <section>
+    <h2>Shopping list — timber</h2>
+    <table><thead><tr><th>Material</th><th class="num">Sticks</th><th>Section &amp; length</th><th class="num">Cost</th></tr></thead>
+      <tbody>${timberRows || `<tr><td colspan="4" style="color:#999">No timber needed.</td></tr>`}</tbody></table>
+  </section>
+
+  <section>
+    <h2>Cut list</h2>
+    <table><thead><tr><th>Part</th><th>Material</th><th class="num">Cut size</th><th class="num">Qty</th></tr></thead>
+      <tbody>${cutRows || `<tr><td colspan="4" style="color:#999">No parts.</td></tr>`}</tbody></table>
+  </section>
+
+  <section>
+    <h2>Screw schedule</h2>
+    <table><thead><tr><th>Screw</th><th class="num">Count</th><th class="num">Boxes</th><th>Drive</th><th class="num">Cost</th></tr></thead>
+      <tbody>${screwRows || `<tr><td colspan="5" style="color:#999">No screws.</td></tr>`}</tbody></table>
+  </section>
+
+  <section>
+    <h2>Estimated cost</h2>
+    <div class="totals">
+      <div class="item"><span class="k">Sheets</span><span class="v">${esc(money(totals.sheetCost, currency))}</span></div>
+      <div class="item"><span class="k">Timber</span><span class="v">${esc(money(totals.timberCost, currency))}</span></div>
+      <div class="item"><span class="k">Screws</span><span class="v">${esc(money(totals.screwCost, currency))}</span></div>
+      <div class="item grand"><span class="k">Grand total</span><span class="v">${esc(money(grand, currency))}</span></div>
+    </div>
+    <p style="color:#666;font-size:11px;margin-top:8px;">Rough builder's-merchant estimate incl. VAT, for planning only.</p>
+  </section>
+
+  <footer class="doc">Nowhere Furniture${date ? ` &middot; ${esc(date)}` : ''}. All dimensions in millimetres.</footer>
+</div>
+</body>
+</html>`;
 }
 
 // ----------------------------------------------------------------------------
