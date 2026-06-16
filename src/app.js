@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=21';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=21';
-import { computeBOM, bomSummaryLine } from './bom.js?v=21';
-import { SHEETS, TIMBER } from './stock.js?v=21';
-import { MATERIALS } from './materials.js?v=21';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=21';
+import { Builder } from './builder.js?v=22';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=22';
+import { computeBOM, bomSummaryLine } from './bom.js?v=22';
+import { SHEETS, TIMBER } from './stock.js?v=22';
+import { MATERIALS } from './materials.js?v=22';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=22';
 import {
   buildFullDocHTML,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=21';
+} from './export.js?v=22';
 
 const $ = (id) => document.getElementById(id);
 
@@ -85,17 +85,11 @@ function renderDesignHead() {
 }
 
 function renderBuildInfo(build) {
+  // The on-screen panel stays minimal: name, sliders, BOM, export. The assembly
+  // steps + engineering notes are reference text — they live in the PDF only
+  // (still carried in currentBuild and handed to buildFullDocHTML on export).
   const el = $('buildinfo');
-  if (!build) { el.innerHTML = ''; return; }
-  // Keep the panel lean: assembly steps only (the build-critical text). The
-  // engineering notes still ride along in build() for export, just not on screen.
-  let html = '';
-  if (build.steps && build.steps.length) {
-    html += `<div class="bi"><h4>${t('asmSteps')}</h4><ol>`;
-    for (const s of build.steps) html += `<li>${s}</li>`;
-    html += '</ol></div>';
-  }
-  el.innerHTML = html;
+  if (el) el.innerHTML = '';
 }
 
 function renderParams() {

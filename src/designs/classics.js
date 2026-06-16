@@ -27,7 +27,7 @@ import {
   ERGO, beam, leg, panel, cleat, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   reviewBuild, difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=21';
+} from '../engineering.js?v=22';
 
 // Small local readability helpers (pure lookups, not box-builders).
 const TH  = (key) => SHEETS[key].thickness;        // sheet thickness in mm
