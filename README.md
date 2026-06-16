@@ -19,8 +19,11 @@ Static site, no build step. Visit it on the local server:
 
 ## What it does
 
-- **Catalog** of 9 parametric designs (chairs, benches, lounges, stool, daybed)
-- **3D builder** — orbit, select, move/rotate with a gizmo, grid-snap, live dimensions
+- **Catalog** of 12 parametric designs across benches, Mari pieces, lounges,
+  stools and a communal table — each with engineered joinery, assembly steps,
+  and a difficulty/build-time badge
+- **3D builder** — orbit, select, move/rotate gizmo, grid-snap, live dimensions,
+  **undo/redo** (⌘Z / ⌘⇧Z), procedural warm-wood materials + soft shadows
 - **Live BOM** — plywood sheets (2D-nested), reglar (cut-optimised into stock lengths),
   Torx screw schedule, rough SEK cost — recomputed on every edit
 - **Exports** — print-ready BOM (HTML/print), BOM + cut-list CSV, sheet-nesting SVG,
@@ -33,9 +36,11 @@ Modular ES modules against one pinned data contract (`PartSpec` / `Joint` / `Des
 | File | Role |
 |---|---|
 | `src/stock.js` | Shared contract + metric stock tables (plywood, reglar, Torx screws) |
-| `src/catalog.js` | The 9 parametric furniture designs (`CATALOG`, each with `build(params)`) |
+| `src/engineering.js` | Structural vocabulary — ergonomics, span/deflection rules, joinery + member factories every design builds from |
+| `src/designs/*.js` | The designs by category (benches, mari, lounge, stools_tables) |
+| `src/catalog.js` | Aggregates the design modules into one `CATALOG` |
 | `src/bom.js` | `computeBOM()` — sheet nesting + timber cut-optimisation + screw schedule |
-| `src/builder.js` | `Builder` class — Three.js scene, gizmo, selection, dimensions |
+| `src/builder.js` | `Builder` class — Three.js scene, gizmo, selection, dimensions, undo/redo, wood graphics |
 | `src/export.js` | CSV / print-HTML / cut-sheet SVG / elevations SVG / project JSON |
 | `src/app.js` | Integration shell — wires catalog → builder → BOM → export |
 
@@ -53,6 +58,7 @@ estimates for ballparking, not quotes.
 | Snap (50 mm / 15°) | `S` |
 | Dimensions on selected | `M` |
 | Add custom sheet / reglar | toolbar |
+| Undo / Redo | `⌘Z` / `⌘⇧Z` (or toolbar) |
 | Duplicate / Delete | `D` / `Del` |
 | Fit view | `F` |
 
@@ -64,7 +70,7 @@ estimates for ballparking, not quotes.
 
 ## Roadmap
 
-- Real wedge / tab / lap **joinery geometry** (parts are still boxes)
+- Real wedge / tab / lap **joinery geometry** (parts are textured boxes today)
 - **DXF** export of panel outlines straight to the CNC
-- Per-part **rotation/length editing** for custom timber from the inspector
-- Wind/anchoring notes per design (Nowhere gusts)
+- Screw-position markers + assembly-step playback in 3D
+- Per-design wind/anchoring detail (Nowhere gusts)

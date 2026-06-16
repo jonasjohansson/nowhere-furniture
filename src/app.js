@@ -16,9 +16,11 @@ const $ = (id) => document.getElementById(id);
 // state
 // ---------------------------------------------------------------------------
 const builder = new Builder($('canvas'));
+window.__builder = builder; // dev hook for inspection
 let currentDesign = null;
 let currentParams = {};
 let currentJoints = [];   // joints from the active design template (drive screws)
+let currentBuild = null;  // last {parts, joints, steps, notes} from build()
 let lastParts = [];
 
 // ---------------------------------------------------------------------------
@@ -59,10 +61,30 @@ function selectDesign(id) {
 
 function renderDesignHead() {
   const d = currentDesign;
-  $('design-head').innerHTML = d
-    ? `<b>${d.name}</b><div class="by">${d.designer}${d.year ? ' · ' + d.year : ''}</div>
-       <div class="blurb">${d.blurb}</div>`
-    : '';
+  if (!d) { $('design-head').innerHTML = ''; return; }
+  const badges = [d.difficulty, d.buildTime].filter(Boolean)
+    .map((b) => `<span class="badge">${b}</span>`).join('');
+  $('design-head').innerHTML =
+    `<b>${d.name}</b><div class="by">${d.designer}${d.year ? ' · ' + d.year : ''}</div>
+     ${badges ? `<div class="badges">${badges}</div>` : ''}
+     <div class="blurb">${d.blurb}</div>`;
+}
+
+function renderBuildInfo(build) {
+  const el = $('buildinfo');
+  if (!build) { el.innerHTML = ''; return; }
+  let html = '';
+  if (build.steps && build.steps.length) {
+    html += '<details class="bi"><summary>Assembly steps</summary><ol>';
+    for (const s of build.steps) html += `<li>${s}</li>`;
+    html += '</ol></details>';
+  }
+  if (build.notes && build.notes.length) {
+    html += '<details class="bi"><summary>Engineering notes</summary><ul>';
+    for (const n of build.notes) html += `<li>${n}</li>`;
+    html += '</ul></details>';
+  }
+  el.innerHTML = html;
 }
 
 function renderParams() {
@@ -96,8 +118,10 @@ function rebuildFromParams() {
     toast('Design build error — see console');
     return;
   }
+  currentBuild = out;
   currentJoints = out.joints || [];   // set BEFORE loadParts so BOM uses them
   builder.loadParts(out.parts || []); // emits 'change' -> recomputes BOM
+  renderBuildInfo(out);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,10 +269,18 @@ $('toolbar').addEventListener('click', (e) => {
     case 'dims':   { dimsOn = !dimsOn; btn.classList.toggle('active', dimsOn); builder.toggleDimensions(dimsOn); break; }
     case 'add-sheet':  addCustomPart('sheet'); break;
     case 'add-timber': addCustomPart('timber'); break;
+    case 'undo':       builder.undo(); break;
+    case 'redo':       builder.redo(); break;
     case 'duplicate':  builder.duplicateSelected(); break;
     case 'delete':     builder.deleteSelected(); break;
     case 'frame':      builder.frameAll(); break;
   }
+});
+
+// enable/disable the undo/redo buttons as history changes
+builder.on('history', ({ canUndo, canRedo }) => {
+  document.querySelector('[data-act=undo]').disabled = !canUndo;
+  document.querySelector('[data-act=redo]').disabled = !canRedo;
 });
 
 function setMode(mode) {
@@ -262,6 +294,16 @@ function setMode(mode) {
 // ---------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea')) return;
+  // Undo / redo (⌘Z / Ctrl+Z, ⌘⇧Z / Ctrl+Y) — handle before the plain-key switch.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) builder.redo(); else builder.undo();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+    e.preventDefault(); builder.redo(); return;
+  }
+  if (e.metaKey || e.ctrlKey) return; // don't hijack other shortcuts
   switch (e.key.toLowerCase()) {
     case 'w': setMode('translate'); break;
     case 'e': setMode('rotate'); break;

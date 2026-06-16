@@ -12,11 +12,19 @@
 // (0.001) on the way in and divided on the way out. getParts() always returns a
 // valid PartSpec array in mm/degrees reflecting live gizmo edits, so BOM/export
 // can consume it directly.
+//
+// This module also owns: a procedural wood-grain material system (warm, raw-pine
+// flavoured, varied per part deterministically), a soft daylight lighting rig
+// with a cheap procedural environment, crisp constructed edges, a grounded
+// contact shadow, plus undo/redo history. All randomness is DETERMINISTIC —
+// there is no Date.now / Math.random anywhere in this file. Per-part variation
+// is derived from a stable hash of the part's id/ref.
 // ============================================================================
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SHEETS, TIMBER, MM } from './stock.js';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
@@ -34,6 +42,41 @@ const SNAP_ROTATE = THREE.MathUtils.degToRad(15); // 15°
 
 const DEG = Math.PI / 180;
 
+// History cap — bounded ring of full snapshots.
+const HISTORY_CAP = 50;
+
+// Procedural wood texture resolution. 512 is plenty for the surface detail we
+// want and keeps GPU upload cheap even with ~150 cloned-per-part textures.
+const WOOD_TEX_SIZE = 512;
+
+// ----------------------------------------------------------------------------
+// Deterministic helpers (no Math.random / Date.now anywhere).
+// ----------------------------------------------------------------------------
+
+/** 32-bit FNV-1a hash of a string -> unsigned int. Stable across runs. */
+function hashString(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** mulberry32 — tiny deterministic PRNG seeded from a uint. Returns a function
+ *  producing floats in [0,1). Used for per-texture procedural detail so each
+ *  generated grain is repeatable for a given seed. */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class Builder {
   /**
    * @param {HTMLElement} container  element the canvas is appended into
@@ -44,7 +87,7 @@ export class Builder {
     this.opts = opts;
 
     // ---- state -----------------------------------------------------------
-    /** @type {Map<string,{id:string,spec:Object,mesh:THREE.Mesh,baseColor:number}>} */
+    /** @type {Map<string,{id:string,spec:Object,mesh:THREE.Mesh,edges:THREE.LineSegments,baseColor:number,seed:number}>} */
     this.items = new Map();
     this.selectedId = null;
     this._snap = false;
@@ -53,29 +96,68 @@ export class Builder {
     this._showDims = false;
     this._listeners = Object.create(null);
 
+    // Camera re-frame is deferred until the container reports a real size — on
+    // first load the canvas is often still 0×0, so frameAll() would compute a
+    // garbage distance and dump the model in a corner. We arm this flag on
+    // loadParts() and let the resize handler fire the actual frame once layout
+    // has settled (see ADD 1).
+    this._pendingFrame = false;
+
+    // ---- undo / redo history --------------------------------------------
+    // Bounded ring of { parts: PartSpec[], selectedId }. `_applying` guards the
+    // mutation methods from pushing while we rebuild from a snapshot.
+    this._history = [];
+    this._histIndex = -1; // points at the current state inside _history
+    this._applying = false;
+
     // ---- renderer --------------------------------------------------------
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // ACES filmic tonemapping gives the warm, slightly filmic daylight roll-off
+    // that keeps highlights on the wood from blowing out to white.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.touchAction = 'none';
 
     // ---- scene -----------------------------------------------------------
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf4f1ea); // warm off-white
+    this.scene.background = new THREE.Color(0xf3efe6); // warm off-white
 
     // ---- camera ----------------------------------------------------------
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
     this.camera.position.set(1.6, 1.4, 2.2);
 
-    // ---- lighting --------------------------------------------------------
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xb9b09a, 0.85);
-    this.scene.add(hemi);
+    // ---- environment (cheap, procedural) --------------------------------
+    // RoomEnvironment baked through PMREM gives the MeshStandard materials
+    // something soft and warm to reflect, so the wood reads like it's in a lit
+    // room rather than a black void. It's generated once and tinted by the
+    // warm background; no HDR file to download.
+    this._pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envScene = new RoomEnvironment();
+    this._envRT = this._pmrem.fromScene(envScene, 0.04);
+    this.scene.environment = this._envRT.texture;
+    // RoomEnvironment builds throwaway meshes; free them immediately.
+    envScene.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) m.dispose();
+      }
+    });
 
-    const dir = new THREE.DirectionalLight(0xfff6e8, 1.15);
+    // ---- lighting --------------------------------------------------------
+    // Hemisphere for soft warm ambient (sky warm-white, ground a muted sand).
+    const hemi = new THREE.HemisphereLight(0xfff3e0, 0xbfa988, 0.55);
+    this.scene.add(hemi);
+    this.hemiLight = hemi;
+
+    // Key directional light — soft PCF shadows, warm daylight colour.
+    const dir = new THREE.DirectionalLight(0xfff4e2, 1.55);
     dir.position.set(3, 5, 2);
     dir.castShadow = true;
     dir.shadow.mapSize.set(2048, 2048);
@@ -86,18 +168,33 @@ export class Builder {
     sc.left = -6; sc.right = 6; sc.top = 6; sc.bottom = -6;
     sc.updateProjectionMatrix();
     dir.shadow.bias = -0.0004;
+    dir.shadow.normalBias = 0.02;
+    dir.shadow.radius = 3; // soften the PCF penumbra a touch
     this.scene.add(dir);
     this.dirLight = dir;
 
-    const fill = new THREE.DirectionalLight(0xffffff, 0.25);
-    fill.position.set(-2, 2, -3);
+    // Cool-ish fill from the opposite side to lift the shadow side without
+    // killing form.
+    const fill = new THREE.DirectionalLight(0xeaf0ff, 0.28);
+    fill.position.set(-2.5, 2, -3);
     this.scene.add(fill);
+    this.fillLight = fill;
+
+    // Subtle warm rim from low-behind for a little edge glow / separation.
+    const rim = new THREE.DirectionalLight(0xffd9a8, 0.35);
+    rim.position.set(-1, 1.2, -4);
+    this.scene.add(rim);
+    this.rimLight = rim;
 
     // ---- ground + grid ---------------------------------------------------
-    // Ground plane at y = 0; receives shadows but does not cast.
+    // A warm, very lightly shaded ground plane that grounds the furniture. It
+    // uses a MeshStandardMaterial (so it picks up the environment) rather than a
+    // pure shadow catcher, to read as a real warm surface under the pieces.
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 40),
-      new THREE.ShadowMaterial({ opacity: 0.18 })
+      new THREE.MeshStandardMaterial({
+        color: 0xece6d8, roughness: 0.95, metalness: 0.0,
+      })
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = 0;
@@ -105,11 +202,32 @@ export class Builder {
     this.scene.add(ground);
     this.ground = ground;
 
-    // Metric grid: 0.1 m minor cells, 4 m extent, coarser major lines.
-    const grid = new THREE.GridHelper(8, 80, 0xc9bfa6, 0xe2dac7);
-    grid.position.y = 0.001; // avoid z-fighting with the shadow plane
+    // A soft radial "contact shadow" decal under the furniture — a cheap
+    // procedural blob texture that darkens the ground near the pieces, giving
+    // the assembly weight even where the directional shadow is shallow. It's
+    // recentred/scaled to the assembly bounds on each (re)frame.
+    const contactTex = this._makeContactShadowTexture();
+    const contact = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        map: contactTex, transparent: true, opacity: 0.5,
+        depthWrite: false, color: 0x000000,
+      })
+    );
+    contact.rotation.x = -Math.PI / 2;
+    contact.position.y = 0.0008; // just above the ground, below the grid
+    contact.renderOrder = -1;
+    contact.scale.set(2.5, 2.5, 1);
+    this.scene.add(contact);
+    this.contactShadow = contact;
+    this._contactTex = contactTex;
+
+    // Metric grid: 0.1 m minor cells, coarser major lines — kept quiet so it
+    // reads as a measuring aid, not decoration.
+    const grid = new THREE.GridHelper(8, 80, 0xcabf9f, 0xe6dcc4);
+    grid.position.y = 0.0016; // above contact shadow, avoid z-fighting
     grid.material.transparent = true;
-    grid.material.opacity = 0.7;
+    grid.material.opacity = 0.5;
     this.grid = grid;
     this.scene.add(grid);
 
@@ -130,19 +248,37 @@ export class Builder {
 
     // Gizmo <-> orbit handoff: while the user drags a gizmo handle, freeze the
     // orbit camera so the drag doesn't fight the camera. Also remember that a
-    // drag happened so the subsequent click doesn't re-raycast / deselect.
+    // drag happened so the subsequent click doesn't re-raycast / deselect, and
+    // push ONE history snapshot at the end of a drag (only if it changed).
     this._dragging = false;
+    this._dragStartSig = null; // signature of the selected part at drag start
     this.gizmo.addEventListener('dragging-changed', (e) => {
       this.orbit.enabled = !e.value;
       this._dragging = e.value;
-      if (e.value) this._draggedThisGesture = true;
+      if (e.value) {
+        // Drag begins: remember the part's transform so we can tell on release
+        // whether anything actually moved (avoid pushing no-op history).
+        this._draggedThisGesture = true;
+        const sel = this._selectedItem();
+        this._dragStartSig = sel ? this._transformSig(sel) : null;
+      } else {
+        // Drag ends: commit a single history snapshot IF the transform changed.
+        const sel = this._selectedItem();
+        const endSig = sel ? this._transformSig(sel) : null;
+        if (this._dragStartSig !== null && endSig !== this._dragStartSig) {
+          this._pushHistory(); // HISTORY PUSH: end-of-drag commit
+        }
+        this._dragStartSig = null;
+      }
     });
     // Live updates while dragging: keep spec + dimension labels in sync and emit
-    // a throttled-ish 'change' (one per object-change event is fine for ~100).
+    // a throttled-ish 'change' (one per object-change event). NOTE: deliberately
+    // does NOT push history — only the end-of-drag commit above does.
     this.gizmo.addEventListener('objectChange', () => {
       const sel = this._selectedItem();
       if (!sel) return;
       this._syncSpecFromMesh(sel);
+      this._syncEdges(sel);
       if (this._showDims) this._updateDimSprites(sel);
       this._emit('change', this.getParts());
     });
@@ -170,6 +306,12 @@ export class Builder {
     dom.addEventListener('pointerdown', this._onPointerDown);
     dom.addEventListener('pointerup', this._onPointerUp);
 
+    // ---- procedural wood material cache ---------------------------------
+    // Base wood textures (map + roughnessMap) generated once per stock key and
+    // cloned/offset per part. Keyed by a string derived from the stock + tint
+    // so unknown keys still get a cached base. See _woodBaseFor().
+    this._woodBaseCache = new Map(); // cacheKey -> {map, rough}
+
     // ---- dimension sprites (lazy) ---------------------------------------
     this._dimSprites = []; // active THREE.Sprite labels on the selected part
     this._dimTexCache = new Map(); // text -> CanvasTexture (reuse across frames)
@@ -195,7 +337,15 @@ export class Builder {
     this.clear({ silent: true });
     for (const spec of specs) this._buildPart(spec);
     this.select(null, { silent: true });
+    // ADD 1: arm a pending frame rather than framing immediately. If the canvas
+    // already has a valid size, frameAll() runs now and clears the flag; if not
+    // (first paint, canvas still 0×0), the resize handler fires it once layout
+    // settles, so the assembly always ends up correctly centred.
+    this._pendingFrame = true;
     this.frameAll();
+    // Seed/extend history: loadParts is a reset boundary. After the first load
+    // this becomes the initial snapshot; later loads push a new boundary.
+    this._seedOrPushHistory();
     this._emit('change', this.getParts());
   }
 
@@ -203,6 +353,7 @@ export class Builder {
   addPart(spec) {
     const item = this._buildPart(spec);
     this.select(item.id);
+    this._pushHistory(); // HISTORY PUSH: after committed add
     this._emit('change', this.getParts());
     return item.id;
   }
@@ -212,15 +363,16 @@ export class Builder {
     const item = this.items.get(id);
     if (!item) return;
     if (this.selectedId === id) this.select(null, { silent: true });
-    this._disposeMesh(item.mesh);
+    this._disposeItem(item);
     this.items.delete(id);
+    this._pushHistory(); // HISTORY PUSH: after committed remove
     this._emit('change', this.getParts());
   }
 
   /** Remove every part. `opts.silent` suppresses the change/select events. */
   clear(opts = {}) {
     this.select(null, { silent: true });
-    for (const item of this.items.values()) this._disposeMesh(item.mesh);
+    for (const item of this.items.values()) this._disposeItem(item);
     this.items.clear();
     if (!opts.silent) this._emit('change', this.getParts());
   }
@@ -280,18 +432,17 @@ export class Builder {
     }
 
     this._syncSpecFromMesh(item);
+    this._syncEdges(item);
     if (this.selectedId === id) {
       if (this._showDims) this._updateDimSprites(item);
       this._emit('select', this._cloneSpec(item.spec));
     }
+    this._pushHistory(); // HISTORY PUSH: after committed update
     this._emit('change', this.getParts());
   }
 
   /** Select a part by id, or null to deselect. */
   select(id, opts = {}) {
-    if (id === this.selectedId) {
-      // still refresh highlight/gizmo target in case of rebuild
-    }
     // Clear previous highlight.
     const prev = this._selectedItem();
     if (prev) this._setHighlight(prev, false);
@@ -349,6 +500,7 @@ export class Builder {
     spec.pos = { x: spec.pos.x + 100, y: spec.pos.y, z: spec.pos.z + 100 };
     const item = this._buildPart(spec);
     this.select(item.id);
+    this._pushHistory(); // HISTORY PUSH: after committed duplicate
     this._emit('change', this.getParts());
     return item.id;
   }
@@ -356,22 +508,34 @@ export class Builder {
   /** Delete the selected part. */
   deleteSelected() {
     if (!this.selectedId) return;
-    this.removePart(this.selectedId);
+    this.removePart(this.selectedId); // removePart pushes history
   }
 
   /** Fit the camera to all parts (or a default framing if the scene is empty). */
   frameAll() {
+    // ADD 1: only treat a frame as "done" (and clear the pending flag) if the
+    // container has a real size. With a 0×0 canvas the aspect/distance maths is
+    // meaningless, so we leave _pendingFrame armed for the resize handler.
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    const validSize = w > 1 && h > 1;
+
     const box = new THREE.Box3();
     let any = false;
     for (const item of this.items.values()) {
       box.expandByObject(item.mesh);
       any = true;
     }
+
+    // Keep the contact shadow sitting under the actual assembly footprint.
+    this._fitContactShadow(any ? box : null);
+
     if (!any) {
       // Empty scene: sensible default look at the origin.
       this.camera.position.set(1.6, 1.4, 2.2);
       this.orbit.target.set(0, 0.3, 0);
       this.orbit.update();
+      if (validSize) this._pendingFrame = false;
       return;
     }
     const size = box.getSize(new THREE.Vector3());
@@ -393,6 +557,10 @@ export class Builder {
     this.camera.far = dist * 50;
     this.camera.updateProjectionMatrix();
     this.orbit.update();
+
+    // Only clear the pending-frame flag once we've actually framed at a valid
+    // size; otherwise the resize handler will re-run this when layout settles.
+    if (validSize) this._pendingFrame = false;
   }
 
   /** Show/hide live mm dimension labels on the SELECTED part. */
@@ -403,9 +571,31 @@ export class Builder {
     else this._clearDimSprites();
   }
 
+  // ---- undo / redo (ADD 2) -----------------------------------------------
+
+  /** Can we step back in history? */
+  canUndo() { return this._histIndex > 0; }
+
+  /** Can we step forward in history? */
+  canRedo() { return this._histIndex >= 0 && this._histIndex < this._history.length - 1; }
+
+  /** Step back one snapshot and rebuild to it (no new history entry). */
+  undo() {
+    if (!this.canUndo()) return;
+    this._histIndex -= 1;
+    this._applyHistory(this._history[this._histIndex]);
+  }
+
+  /** Step forward one snapshot and rebuild to it (no new history entry). */
+  redo() {
+    if (!this.canRedo()) return;
+    this._histIndex += 1;
+    this._applyHistory(this._history[this._histIndex]);
+  }
+
   // ---- event emitter ------------------------------------------------------
 
-  /** Subscribe. event: 'select' | 'change'. */
+  /** Subscribe. event: 'select' | 'change' | 'history'. */
   on(event, cb) {
     (this._listeners[event] || (this._listeners[event] = [])).push(cb);
     return this;
@@ -435,6 +625,13 @@ export class Builder {
     for (const tex of this._dimTexCache.values()) tex.dispose();
     this._dimTexCache.clear();
 
+    // Free cached procedural wood base textures.
+    for (const base of this._woodBaseCache.values()) {
+      base.map.dispose();
+      base.rough.dispose();
+    }
+    this._woodBaseCache.clear();
+
     this.gizmo.detach();
     this.gizmo.dispose();
     this.orbit.dispose();
@@ -443,6 +640,14 @@ export class Builder {
     this.grid.material.dispose();
     this.ground.geometry.dispose();
     this.ground.material.dispose();
+    this.contactShadow.geometry.dispose();
+    this.contactShadow.material.dispose();
+    if (this._contactTex) this._contactTex.dispose();
+
+    // Environment / PMREM.
+    if (this._envRT) this._envRT.dispose();
+    if (this._pmrem) this._pmrem.dispose();
+    this.scene.environment = null;
 
     this.renderer.dispose();
     if (dom.parentNode) dom.parentNode.removeChild(dom);
@@ -464,6 +669,74 @@ export class Builder {
 
   _selectedItem() {
     return this.selectedId ? this.items.get(this.selectedId) || null : null;
+  }
+
+  // --- history (ADD 2) ---------------------------------------------------
+
+  /** A snapshot of the whole editable state. */
+  _snapshot() {
+    return { parts: this.getParts(), selectedId: this.selectedId };
+  }
+
+  /** Push a snapshot after a committed mutation. Truncates any redo branch,
+   *  enforces the cap, and emits 'history'. No-ops while applying a snapshot. */
+  _pushHistory() {
+    if (this._applying) return;
+    // Drop any redo tail — a new edit forks history.
+    if (this._histIndex < this._history.length - 1) {
+      this._history.length = this._histIndex + 1;
+    }
+    this._history.push(this._snapshot());
+    // Enforce the bounded cap by dropping the oldest entries.
+    if (this._history.length > HISTORY_CAP) {
+      this._history.splice(0, this._history.length - HISTORY_CAP);
+    }
+    this._histIndex = this._history.length - 1;
+    this._emitHistory();
+  }
+
+  /** Seed the initial snapshot on the first load; afterwards behave like a
+   *  normal push (loadParts is a reset boundary). */
+  _seedOrPushHistory() {
+    if (this._applying) return;
+    if (this._history.length === 0) {
+      this._history.push(this._snapshot());
+      this._histIndex = 0;
+      this._emitHistory();
+    } else {
+      this._pushHistory();
+    }
+  }
+
+  /** Rebuild parts to a snapshot and restore selection WITHOUT pushing a new
+   *  history entry. Emits 'history' + a normal 'change' so app/BOM refresh. */
+  _applyHistory(entry) {
+    this._applying = true;
+    try {
+      this.clear({ silent: true });
+      for (const spec of entry.parts) this._buildPart(spec);
+      const want = entry.selectedId;
+      this.select(want && this.items.has(want) ? want : null, { silent: true });
+      // Tell the inspector about the restored selection.
+      const cur = this._selectedItem();
+      this._emit('select', cur ? this._cloneSpec(cur.spec) : null);
+    } finally {
+      this._applying = false;
+    }
+    this._emitHistory();
+    this._emit('change', this.getParts());
+  }
+
+  _emitHistory() {
+    this._emit('history', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+  }
+
+  /** Compact string signature of a part's transform — used to detect whether a
+   *  gizmo drag actually changed anything before committing history. */
+  _transformSig(item) {
+    const p = item.mesh.position, r = item.mesh.rotation;
+    const q = (n) => Math.round(n * 1e5) / 1e5; // ignore sub-µm float noise
+    return `${q(p.x)},${q(p.y)},${q(p.z)}|${q(r.x)},${q(r.y)},${q(r.z)}`;
   }
 
   // --- stock + spec helpers ---------------------------------------------
@@ -526,18 +799,30 @@ export class Builder {
     const spec = this._normalizeSpec(rawSpec);
     const id = nextId();
 
+    // Deterministic per-part seed from its ref (preferred, stable across edits)
+    // or its id. Drives grain direction, tint/offset jitter — NO Math.random.
+    const seed = hashString(`${spec.ref || ''}|${spec.stock || ''}|${id}`);
+
     // Geometry in METRES (mm * MM). Box centred on its own origin so the mesh
     // position == part centre, matching PartSpec.pos semantics.
     const geo = new THREE.BoxGeometry(
       spec.size.w * MM, spec.size.h * MM, spec.size.d * MM
     );
-    const mat = new THREE.MeshStandardMaterial({ roughness: 0.75, metalness: 0.0 });
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.72, metalness: 0.0 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData.builderId = id;
 
-    const item = { id, spec, mesh, baseColor: 0xffffff };
+    // Crisp constructed edges: a darker line overlay tracing the box edges.
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo, 1),
+      new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18 })
+    );
+    edges.raycast = () => {}; // never pickable
+    mesh.add(edges); // child of the mesh so it follows transforms for free
+
+    const item = { id, spec, mesh, edges, baseColor: 0xffffff, seed };
     this.items.set(id, item);
     this.scene.add(mesh);
 
@@ -546,39 +831,261 @@ export class Builder {
     return item;
   }
 
-  /** (Re)build the box geometry from the current spec size (mm -> m). */
+  /** (Re)build the box geometry from the current spec size (mm -> m). Rebuilds
+   *  the edge overlay too. */
   _rebuildGeometry(item) {
     const { size } = item.spec;
     item.mesh.geometry.dispose();
     item.mesh.geometry = new THREE.BoxGeometry(
       size.w * MM, size.h * MM, size.d * MM
     );
+    // Rebuild edges to match the new box.
+    item.edges.geometry.dispose();
+    item.edges.geometry = new THREE.EdgesGeometry(item.mesh.geometry, 1);
   }
 
-  /** Apply stock colour + tone (sheet vs timber differ slightly) to material. */
+  /** Edge overlay is a child of the mesh, so transforms propagate automatically.
+   *  This is a placeholder hook kept for symmetry with gizmo sync sites. */
+  _syncEdges(/* item */) { /* edges follow mesh as a child — nothing to do */ }
+
+  // --- procedural wood material -----------------------------------------
+
+  /**
+   * Generate the base wood textures for a tint colour. Returns { map, rough }:
+   *  - map: an albedo canvas texture — a warm pine field with soft growth-ring
+   *    banding running along U, a faint directional fibre grain, and fine
+   *    speckle noise so no two pixels are flat.
+   *  - rough: a subtle roughness variation map (lighter in the grain valleys,
+   *    so the rings catch light slightly differently) for material depth.
+   *
+   * The grain runs along the texture's U axis; callers rotate the texture per
+   * part so the grain follows the part's longest axis. Textures are cached per
+   * cacheKey and cloned per part, so building 150 parts is a handful of canvas
+   * draws, not 150.
+   *
+   * Procedural detail uses a SEEDED PRNG (mulberry32) keyed off the tint, so the
+   * generated grain is deterministic — no Math.random.
+   */
+  _generateWoodBase(baseColor, seedKey) {
+    const size = WOOD_TEX_SIZE;
+    const rnd = mulberry32(hashString(seedKey));
+
+    // --- albedo canvas ---
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    // Warm raw-pine base: take the stock colour and push it warm + a touch more
+    // saturated so it reads like Mari-style raw timber, not grey MDF.
+    const base = new THREE.Color(baseColor);
+    const hsl = { h: 0, s: 0, l: 0 };
+    base.getHSL(hsl);
+    hsl.h = (hsl.h + 0.005) % 1; // nudge toward amber
+    hsl.s = Math.min(1, hsl.s * 1.18 + 0.04); // a little more colourful
+    hsl.l = Math.min(0.92, hsl.l * 1.04 + 0.02); // keep it light/warm
+    const field = new THREE.Color().setHSL(hsl.h, hsl.s, hsl.l);
+
+    ctx.fillStyle = `rgb(${(field.r * 255) | 0},${(field.g * 255) | 0},${(field.b * 255) | 0})`;
+    ctx.fillRect(0, 0, size, size);
+
+    // Growth-ring banding: gentle vertical-ish bands across U (the grain runs
+    // along U, so the rings are lines of varying tone perpendicular to fibre).
+    // We sum a few sine waves with seeded phase/amplitude for an organic look.
+    const ringImg = ctx.getImageData(0, 0, size, size);
+    const data = ringImg.data;
+    // A handful of seeded ring "centres" give the banding character.
+    const waves = [];
+    const nWaves = 4 + ((rnd() * 3) | 0);
+    for (let i = 0; i < nWaves; i++) {
+      waves.push({
+        freq: 6 + rnd() * 22,      // bands across the width
+        phase: rnd() * Math.PI * 2,
+        amp: 0.04 + rnd() * 0.07,  // tonal depth of this band set
+        skew: (rnd() - 0.5) * 0.6, // slight diagonal lean of the rings
+      });
+    }
+    // Fine fibre lines run along U; a high-freq, low-amp modulation along V.
+    const fibreFreq = 120 + rnd() * 120;
+    const fibrePhase = rnd() * Math.PI * 2;
+
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+        // Sum the growth-ring waves (function of u, leaning by v*skew).
+        let band = 0;
+        for (const w of waves) {
+          band += Math.sin((u + v * w.skew) * w.freq * Math.PI * 2 + w.phase) * w.amp;
+        }
+        // Directional fibre: faint streaks along U.
+        const fibre = Math.sin(v * fibreFreq + fibrePhase + Math.sin(u * 9.0) * 0.8) * 0.018;
+        // Fine speckle so flat areas still have tooth.
+        const speck = (rnd() - 0.5) * 0.05;
+        const shade = 1 + band + fibre + speck;
+
+        const idx = (y * size + x) * 4;
+        data[idx] = Math.max(0, Math.min(255, data[idx] * shade));
+        data[idx + 1] = Math.max(0, Math.min(255, data[idx + 1] * shade));
+        data[idx + 2] = Math.max(0, Math.min(255, data[idx + 2] * shade));
+      }
+    }
+    ctx.putImageData(ringImg, 0, 0);
+
+    // Occasional darker "knot-ish" smudges, very subtle, seeded — breaks up any
+    // residual regularity without looking cartoonish.
+    const knots = (rnd() * 2.5) | 0;
+    for (let k = 0; k < knots; k++) {
+      const kx = rnd() * size, ky = rnd() * size;
+      const kr = size * (0.03 + rnd() * 0.05);
+      const g = ctx.createRadialGradient(kx, ky, 0, kx, ky, kr);
+      g.addColorStop(0, 'rgba(80,52,28,0.16)');
+      g.addColorStop(1, 'rgba(80,52,28,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(kx, ky, kr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const map = new THREE.CanvasTexture(canvas);
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.wrapS = map.wrapT = THREE.RepeatWrapping;
+    map.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+
+    // --- roughness variation canvas ---
+    // Mid-grey with the same banding embossed slightly: ring valleys read a hair
+    // glossier so the grain catches the light. Cheap to derive from the albedo.
+    const rcanvas = document.createElement('canvas');
+    rcanvas.width = rcanvas.height = size;
+    const rctx = rcanvas.getContext('2d');
+    rctx.drawImage(canvas, 0, 0);
+    const rImg = rctx.getImageData(0, 0, size, size);
+    const rData = rImg.data;
+    for (let i = 0; i < rData.length; i += 4) {
+      // Luminance of the albedo -> roughness around 0.65..0.82.
+      const lum = (rData[i] * 0.299 + rData[i + 1] * 0.587 + rData[i + 2] * 0.114) / 255;
+      const rough = Math.max(0, Math.min(255, (0.82 - lum * 0.18) * 255));
+      rData[i] = rData[i + 1] = rData[i + 2] = rough;
+      rData[i + 3] = 255;
+    }
+    rctx.putImageData(rImg, 0, 0);
+    const rough = new THREE.CanvasTexture(rcanvas);
+    rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
+
+    return { map, rough };
+  }
+
+  /** Fetch (or generate + cache) the base wood textures for a part's tint. */
+  _woodBaseFor(baseColor) {
+    // Cache key is the quantised tint so close colours share a base — keeps the
+    // number of generated textures small while preserving per-stock character.
+    const cacheKey = `w${baseColor}`;
+    let base = this._woodBaseCache.get(cacheKey);
+    if (!base) {
+      base = this._generateWoodBase(baseColor, cacheKey);
+      this._woodBaseCache.set(cacheKey, base);
+    }
+    return base;
+  }
+
+  /**
+   * Apply the procedural wood material to a part. Clones the cached base
+   * textures so each part can carry its own grain DIRECTION (along its longest
+   * axis), its own repeat (so grain density scales with part size), and a small
+   * deterministic offset/tint jitter so cloned parts never look identical.
+   */
   _applyMaterial(item) {
     const { color, isSheet } = this._stockInfo(item.spec);
     item.baseColor = color;
-    const c = new THREE.Color(color);
-    // Sheet plywood reads a touch lighter/cooler; timber a touch warmer/darker.
-    if (isSheet) c.offsetHSL(0, -0.02, 0.03);
-    else c.offsetHSL(0.005, 0.02, -0.03);
-    item.mesh.material.color.copy(c);
-    item.mesh.material.roughness = isSheet ? 0.7 : 0.78;
+    const seed = item.seed;
+    const rnd = mulberry32(seed);
+
+    const base = this._woodBaseFor(color);
+
+    // Clone the cached textures so we can give this part its own transform
+    // (rotation/offset/repeat) without disturbing other parts sharing the base.
+    const map = base.map.clone();
+    map.needsUpdate = true;
+    const rough = base.rough.clone();
+    rough.needsUpdate = true;
+
+    // Grain runs along texture-U. Map U to the part's LONGEST axis so the grain
+    // visually flows down the length of the board, as real timber would.
+    const { w, h, d } = item.spec.size;
+    const longest = Math.max(w, h, d);
+    // Texture rotation in 90° steps depending on which face axis is longest.
+    // BoxGeometry UVs map per-face; a single rotation gives a convincing,
+    // cheap "grain follows length" read without per-face UV surgery.
+    let rot = 0;
+    if (longest === h) rot = Math.PI / 2;        // tall part -> grain vertical
+    else if (longest === d) rot = Math.PI / 2;   // deep part -> rotate too
+    map.center.set(0.5, 0.5);
+    rough.center.set(0.5, 0.5);
+    map.rotation = rot;
+    rough.rotation = rot;
+
+    // Repeat so grain density is roughly constant in world space (denser grain
+    // on big panels would look fake). Tie repeats to size in metres.
+    const repU = Math.max(1, (longest * MM) / 0.35);
+    const repV = Math.max(1, (Math.min(w, h, d) * MM) / 0.18 + 1);
+    map.repeat.set(repU, repV);
+    rough.repeat.set(repU, repV);
+
+    // Deterministic per-part offset jitter -> different slice of the grain.
+    const offU = rnd();
+    const offV = rnd();
+    map.offset.set(offU, offV);
+    rough.offset.set(offU, offV);
+
+    const m = item.mesh.material;
+    // Dispose any previously-assigned cloned maps before replacing them.
+    if (m.map && m.map !== map) m.map.dispose();
+    if (m.roughnessMap && m.roughnessMap !== rough) m.roughnessMap.dispose();
+    m.map = map;
+    m.roughnessMap = rough;
+
+    // Per-part tint jitter on TOP of the texture: a small warm hue/lightness
+    // wobble (deterministic) so identical parts read as individual boards.
+    const tint = new THREE.Color(0xffffff);
+    const th = { h: 0, s: 0, l: 0 };
+    tint.getHSL(th);
+    tint.setHSL(
+      (0.07 + (rnd() - 0.5) * 0.01 + 1) % 1, // warm amber tint band
+      0.10 + rnd() * 0.06,
+      0.92 + (rnd() - 0.5) * 0.06
+    );
+    m.color.copy(tint);
+
+    // Sheet plywood reads a touch lighter/cooler & smoother; timber warmer.
+    if (isSheet) {
+      m.color.offsetHSL(0, -0.02, 0.03);
+      m.roughness = 0.62;
+    } else {
+      m.color.offsetHSL(0.004, 0.02, -0.02);
+      m.roughness = 0.74;
+    }
+    m.envMapIntensity = 0.7;
+    m.needsUpdate = true;
+
     // Re-apply selection highlight if this is the selected part.
     this._setHighlight(item, this.selectedId === item.id);
   }
 
-  /** Subtle emissive highlight on the selected part. */
+  /** Warm emissive lift on the selected part so it reads clearly against the
+   *  richer wood materials, plus a brighter, warmer edge line. */
   _setHighlight(item, on) {
     const m = item.mesh.material;
     if (on) {
-      m.emissive = new THREE.Color(0xc2703d); // accent
-      m.emissiveIntensity = 0.18;
+      m.emissive = new THREE.Color(0xc2703d); // warm accent
+      m.emissiveIntensity = 0.22;
+      item.edges.material.color.set(0xc2703d);
+      item.edges.material.opacity = 0.7;
     } else {
       m.emissive = new THREE.Color(0x000000);
       m.emissiveIntensity = 0;
+      item.edges.material.color.set(0x000000);
+      item.edges.material.opacity = 0.18;
     }
+    m.needsUpdate = true;
   }
 
   // --- transforms: spec <-> mesh ----------------------------------------
@@ -640,6 +1147,7 @@ export class Builder {
 
     const meshes = [];
     for (const item of this.items.values()) meshes.push(item.mesh);
+    // Non-recursive so the edge-line child isn't tested (it's also non-pickable).
     const hits = this.raycaster.intersectObjects(meshes, false);
 
     if (hits.length) {
@@ -648,6 +1156,44 @@ export class Builder {
     } else {
       this.select(null); // empty space -> deselect
     }
+  }
+
+  // --- contact shadow ----------------------------------------------------
+
+  /** Build a soft radial blob texture used as a fake contact/ambient shadow
+   *  under the assembly. Pure procedural gradient — deterministic, no random. */
+  _makeContactShadowTexture() {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const g = ctx.createRadialGradient(
+      size / 2, size / 2, 0, size / 2, size / 2, size / 2
+    );
+    g.addColorStop(0, 'rgba(0,0,0,0.55)');
+    g.addColorStop(0.55, 'rgba(0,0,0,0.22)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /** Recentre/scale the contact-shadow decal under the assembly footprint. */
+  _fitContactShadow(box) {
+    if (!this.contactShadow) return;
+    if (!box) {
+      this.contactShadow.visible = false;
+      return;
+    }
+    this.contactShadow.visible = true;
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    // Footprint with generous padding so the soft edge falls off past the legs.
+    const footprint = Math.max(size.x, size.z, 0.2) * 2.2;
+    this.contactShadow.scale.set(footprint, footprint, 1);
+    this.contactShadow.position.set(center.x, 0.0008, center.z);
   }
 
   // --- dimension sprites -------------------------------------------------
@@ -666,10 +1212,11 @@ export class Builder {
       canvas.height = fontPx + pad * 2;
       // Re-acquire context dims after resize, redraw.
       ctx.font = `600 ${fontPx}px ${'-apple-system, system-ui, sans-serif'}`;
-      ctx.fillStyle = 'rgba(43,43,43,0.92)';
+      // Warm-dark pill keeps labels legible against the wood + off-white bg.
+      ctx.fillStyle = 'rgba(54,42,30,0.92)';
       this._roundRect(ctx, 0, 0, canvas.width, canvas.height, 6);
       ctx.fill();
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = '#fdf6ec';
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
@@ -736,11 +1283,25 @@ export class Builder {
 
   // --- lifecycle ---------------------------------------------------------
 
-  _disposeMesh(mesh) {
+  /** Dispose a part item: mesh geometry/material (+ cloned wood maps) and its
+   *  edge overlay. Detaches the gizmo if it was attached to this mesh. */
+  _disposeItem(item) {
+    const mesh = item.mesh;
     if (this.gizmo.object === mesh) this.gizmo.detach();
     this.scene.remove(mesh);
+    // Edge overlay (child of mesh).
+    if (item.edges) {
+      item.edges.geometry.dispose();
+      item.edges.material.dispose();
+    }
     mesh.geometry.dispose();
-    if (mesh.material) mesh.material.dispose();
+    if (mesh.material) {
+      // Per-part cloned wood maps must be disposed individually (the BASE maps
+      // live in _woodBaseCache and are freed in dispose()).
+      if (mesh.material.map) mesh.material.map.dispose();
+      if (mesh.material.roughnessMap) mesh.material.roughnessMap.dispose();
+      mesh.material.dispose();
+    }
   }
 
   _resize() {
@@ -749,6 +1310,16 @@ export class Builder {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+
+    // ADD 1: once the container actually has a real (non-trivial) size AND a
+    // frame is pending from loadParts(), do the deferred framing now. This is
+    // what fixes "model loads tiny in a corner": the first frameAll() during
+    // loadParts ran against a 0×0 canvas and left _pendingFrame armed; here it
+    // finally runs with correct dimensions. It only fires while pending, so it
+    // never steals the camera after the user has started orbiting.
+    if (this._pendingFrame && this.container.clientWidth > 1 && this.container.clientHeight > 1) {
+      this.frameAll();
+    }
   }
 
   _tick() {

@@ -69,6 +69,16 @@ button.active:hover { background: var(--accent-ink); }
 /* design head + params */
 #design-head b { font-size: 14px; }
 #design-head .by { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+#design-head .badges { display: flex; gap: 5px; margin: 4px 0 6px; flex-wrap: wrap; }
+#design-head .badge { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  background: #efe9db; border: 1px solid var(--line-strong); color: var(--muted);
+  padding: 1px 6px; border-radius: 20px; }
+#buildinfo { margin-top: 12px; }
+#buildinfo .bi { border-top: 1px solid var(--line); padding: 6px 0; }
+#buildinfo summary { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--accent-ink); cursor: pointer; }
+#buildinfo ol, #buildinfo ul { margin: 8px 0 4px; padding-left: 18px; }
+#buildinfo li { font-size: 12px; line-height: 1.5; color: #4a463c; margin-bottom: 4px; }
 #design-head .blurb { font-size: 12px; line-height: 1.5; color: #4a463c; margin-bottom: 4px; }
 .param { margin: 10px 0; }
 .param .top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
