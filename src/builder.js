@@ -129,7 +129,7 @@ export class Builder {
 
     // ---- scene -----------------------------------------------------------
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf3efe6); // warm off-white
+    this.scene.background = new THREE.Color(0xe9e2d4); // warm sand (matches the UI)
 
     // ---- camera ----------------------------------------------------------
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -196,7 +196,7 @@ export class Builder {
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 40),
       new THREE.MeshStandardMaterial({
-        color: 0xece6d8, roughness: 0.95, metalness: 0.0,
+        color: 0xe3dac6, roughness: 0.96, metalness: 0.0,
       })
     );
     ground.rotation.x = -Math.PI / 2;
