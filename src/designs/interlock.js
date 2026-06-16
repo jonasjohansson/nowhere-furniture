@@ -47,6 +47,7 @@ export const INTERLOCK = [
       { key: 'depth', label: 'Top depth',   min: 220, max: 500, step: 10, default: 300, unit: 'mm' },
       { key: 'tabD',  label: 'Tab depth',   min: 18,  max: 60,  step: 2,  default: 18,  unit: 'mm' },
       { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 6, step: 1, default: 1, unit: '' },
+      { key: 'gap',   label: 'Gap between units', min: 0, max: 400, step: 10, default: 0, unit: 'mm' },
     ],
 
     build(p) {
@@ -105,11 +106,15 @@ export const INTERLOCK = [
       // the origin.
       const units = Math.max(1, Math.round(p.units || 1));
       const base  = baseUnit();
-      const z0    = -((units - 1) * p.depth) / 2;
+      // Offset neighbours by one leg-thickness so the interlocked tabs FILL the
+      // seam (a clean reveal) instead of the outboard legs overlapping the next
+      // unit's top — plus any extra user gap between units.
+      const pitch = p.depth + legThk + Math.max(0, p.gap || 0);
+      const z0    = -((units - 1) * pitch) / 2;
       const parts = [];
       for (let k = 0; k < units; k++) {
         const flip = (k % 2) === 1;          // alternate 180° rotation
-        const oz   = z0 + k * p.depth;
+        const oz   = z0 + k * pitch;
         for (const part of base) {
           parts.push({
             ...part,
