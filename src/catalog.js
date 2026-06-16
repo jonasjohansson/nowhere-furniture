@@ -7,6 +7,9 @@ import { MARI } from './designs/mari.js';
 import { LOUNGE } from './designs/lounge.js';
 import { STOOLS } from './designs/stools_tables.js';
 import { CLASSICS } from './designs/classics.js';
+import { MODULAR } from './designs/modular.js';
+import { INTERLOCK } from './designs/interlock.js';
+import { HORSE } from './designs/horse.js';
 
-export const CATALOG = [...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS];
+export const CATALOG = [...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS, ...MODULAR, ...INTERLOCK, ...HORSE];
 export default CATALOG;
