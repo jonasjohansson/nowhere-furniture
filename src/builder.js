@@ -24,7 +24,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { SHEETS, TIMBER, MM } from './stock.js';
 import { disposeWoodCache } from './wood.js';
 import { materialMaterial, defaultMaterialForStock } from './materials.js';
@@ -141,17 +141,21 @@ export class Builder {
     // room rather than a black void. It's generated once and tinted by the
     // warm background; no HDR file to download.
     this._pmrem = new THREE.PMREMGenerator(this.renderer);
-    const envScene = new RoomEnvironment();
-    this._envRT = this._pmrem.fromScene(envScene, 0.04);
-    this.scene.environment = this._envRT.texture;
-    // RoomEnvironment builds throwaway meshes; free them immediately.
-    envScene.traverse((o) => {
-      if (o.geometry) o.geometry.dispose();
-      if (o.material) {
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        for (const m of mats) m.dispose();
-      }
-    });
+    this._pmrem.compileEquirectangularShader();
+    // Load a desert-sky HDRI for image-based lighting + a soft sky backdrop.
+    // Until it arrives the warm-sand background (set above) stands in; on failure
+    // it simply stays sand.
+    new RGBELoader().load('assets/hdri/desert.hdr', (hdr) => {
+      if (this._disposed) { hdr.dispose(); return; }
+      hdr.mapping = THREE.EquirectangularReflectionMapping;
+      const rt = this._pmrem.fromEquirectangular(hdr);
+      this.scene.environment = rt.texture;        // reflections + IBL on the wood
+      this.scene.background = hdr;                 // the desert sky itself
+      this.scene.backgroundBlurriness = 0.5;      // soft, keeps furniture the subject
+      this.scene.backgroundIntensity = 1.05;
+      this._envRT = rt;
+      this._hdrTex = hdr;
+    }, undefined, () => { /* keep the sand background on load failure */ });
 
     // ---- lighting --------------------------------------------------------
     // Hemisphere for soft warm ambient (sky warm-white, ground a muted sand).
@@ -650,10 +654,12 @@ export class Builder {
     this.contactShadow.material.dispose();
     if (this._contactTex) this._contactTex.dispose();
 
-    // Environment / PMREM.
+    // Environment / PMREM / HDRI.
     if (this._envRT) this._envRT.dispose();
+    if (this._hdrTex) this._hdrTex.dispose();
     if (this._pmrem) this._pmrem.dispose();
     this.scene.environment = null;
+    this.scene.background = null;
 
     this.renderer.dispose();
     if (dom.parentNode) dom.parentNode.removeChild(dom);
