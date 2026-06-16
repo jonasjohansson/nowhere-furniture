@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=14';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=14';
-import { computeBOM, bomSummaryLine } from './bom.js?v=14';
-import { SHEETS, TIMBER } from './stock.js?v=14';
-import { MATERIALS } from './materials.js?v=14';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=14';
+import { Builder } from './builder.js?v=15';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=15';
+import { computeBOM, bomSummaryLine } from './bom.js?v=15';
+import { SHEETS, TIMBER } from './stock.js?v=15';
+import { MATERIALS } from './materials.js?v=15';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=15';
 import {
-  bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
+  bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG, buildExplodedSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=14';
+} from './export.js?v=15';
 
 const $ = (id) => document.getElementById(id);
 
@@ -381,6 +381,7 @@ $('right').addEventListener('click', (e) => {
     case 'parts-csv':  downloadFile('nowhere-cutlist.csv', partsToCSV(lastParts), 'text/csv'); break;
     case 'cutsheet':   downloadFile('nowhere-cutsheets.svg', buildCutSheetSVG(bom), 'image/svg+xml'); break;
     case 'elevations': downloadFile('nowhere-elevations.svg', buildElevationsSVG(lastParts), 'image/svg+xml'); break;
+    case 'exploded':   downloadFile('nowhere-pieces.svg', buildExplodedSVG(lastParts, { steps: currentBuild?.steps, name: currentDesign?.name }), 'image/svg+xml'); break;
     case 'save':       exportProjectJSON({ design: currentDesign?.id, params: currentParams, parts: lastParts }, 'nowhere-project.json'); break;
     case 'load':       $('file-input').click(); break;
   }

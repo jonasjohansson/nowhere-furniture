@@ -31,7 +31,7 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=14';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=15';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities
@@ -868,6 +868,135 @@ function dimLine(x1, y1, x2, y2, label, dir, tick = 5) {
     out.push(`<text x="${round(x1 - 6, 1)}" y="${round(my, 1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="${col}" text-anchor="middle" transform="rotate(-90 ${round(x1 - 6, 1)} ${round(my, 1)})">${xesc(label)}</text>`);
   }
   return out.join('');
+}
+
+// ============================================================================
+// 5b. buildExplodedSVG — every distinct piece drawn to scale + dimensioned,
+//     followed by the numbered assembly steps. One self-contained build sheet.
+// ============================================================================
+/**
+ * "Exploded" parts plate: group the PartSpec[] into distinct pieces (same name +
+ * cut size + stock), draw each ONE to a shared scale with its broad face shown,
+ * fully dimensioned (width, height, thickness) and badged with its quantity, in
+ * a wrapping grid. Below the pieces, the design's assembly steps are listed.
+ *
+ * Shared scale across every piece so relative sizes read true at a glance — a
+ * builder sees the whole kit of parts and how many of each, then the steps.
+ *
+ * @param {PartSpec[]} parts
+ * @param {{ steps?:string[], name?:string }} [opts]
+ * @returns {string} standalone SVG
+ */
+export function buildExplodedSVG(parts, opts = {}) {
+  parts = arr(parts);
+  if (!parts.length) return emptySVG('No parts to draw.');
+
+  // --- group into distinct pieces ------------------------------------------
+  const groups = new Map();
+  for (const p of parts) {
+    const s = p.size || { w: 0, h: 0, d: 0 };
+    const w = round(s.w), h = round(s.h), d = round(s.d);
+    const key = [p.name || '', p.stock || '', w, h, d].join('|');
+    let g = groups.get(key);
+    if (!g) {
+      // Broad face = two largest dims; thickness = smallest.
+      const dims = [w, h, d].sort((a, b) => b - a);
+      g = { ref: p.ref || '', name: p.name || '', stock: p.stock || '',
+            material: p.material || '', face: [dims[0], dims[1]], thick: dims[2], qty: 0 };
+      groups.set(key, g);
+    }
+    g.qty += 1;
+  }
+  // Biggest pieces first.
+  const pieces = [...groups.values()].sort((a, b) =>
+    (b.face[0] * b.face[1]) - (a.face[0] * a.face[1]));
+
+  // --- shared mm -> px scale ------------------------------------------------
+  const maxDim = Math.max(1, ...pieces.map((g) => g.face[0]));
+  const scale = Math.min(0.26, 240 / maxDim);   // cap so small kits don't balloon
+
+  // --- layout constants (px) ------------------------------------------------
+  const PAGE_W = 1040, MARGIN = 40;
+  const TOP_LABEL = 26, LEFT_GUTTER = 40, BOTTOM_DIM = 34, CELL_PAD = 26;
+  const COL_GAP = 34, ROW_GAP = 30;
+
+  const title = opts.name ? `${opts.name} — pieces & assembly` : 'Pieces & assembly';
+
+  const body = [];
+  let y = MARGIN;
+
+  // Title
+  body.push(`<text x="${MARGIN}" y="${y + 6}" font-size="22" font-weight="bold" fill="#1a1a1a">${xesc(title)}</text>`);
+  const totalParts = parts.length, kinds = pieces.length;
+  body.push(`<text x="${PAGE_W - MARGIN}" y="${y + 6}" font-size="13" fill="#666" text-anchor="end">${kinds} distinct pieces · ${totalParts} parts total · mm</text>`);
+  y += 34;
+  body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#1a1a1a" stroke-width="1.5"/>`);
+  y += 24;
+
+  // --- pieces grid ----------------------------------------------------------
+  let x = MARGIN, rowH = 0;
+  for (const g of pieces) {
+    const rw = g.face[0] * scale, rh = g.face[1] * scale;
+    const cellW = LEFT_GUTTER + rw + CELL_PAD;
+    const cellH = TOP_LABEL + rh + BOTTOM_DIM;
+    if (x + cellW > PAGE_W - MARGIN) { x = MARGIN; y += rowH + ROW_GAP; rowH = 0; }
+
+    const rx = x + LEFT_GUTTER, ry = y + TOP_LABEL;
+
+    // header: ref + name + qty badge
+    const head = `${g.ref ? g.ref + '  ' : ''}${g.name}`;
+    body.push(`<text x="${round(x, 1)}" y="${round(y + 16, 1)}" font-size="13" font-weight="600" fill="#1a1a1a">${xesc(head)}</text>`);
+    body.push(`<text x="${round(x + cellW, 1)}" y="${round(y + 16, 1)}" font-size="13" font-weight="700" fill="#2b5d8a" text-anchor="end">×${g.qty}</text>`);
+
+    // the piece (broad face), plywood-blue fill like the cut sheet
+    body.push(`<rect x="${round(rx, 1)}" y="${round(ry, 1)}" width="${round(rw, 1)}" height="${round(rh, 1)}" fill="#cfe2f3" stroke="#2b5d8a" stroke-width="1.5"/>`);
+    // thickness note, centred on the face
+    body.push(`<text x="${round(rx + rw / 2, 1)}" y="${round(ry + rh / 2, 1)}" font-size="12" fill="#1a1a1a" text-anchor="middle" dominant-baseline="middle">t = ${g.thick} mm${g.material === 'sheet' ? ' ply' : ''}</text>`);
+
+    // width dim (bottom) + height dim (left)
+    body.push(dimLine(rx, ry + rh + 12, rx + rw, ry + rh + 12, `${g.face[0]} mm`, 'h', 5));
+    body.push(dimLine(rx - 12, ry, rx - 12, ry + rh, `${g.face[1]} mm`, 'v', 5));
+
+    x += cellW + COL_GAP;
+    rowH = Math.max(rowH, cellH);
+  }
+  y += rowH + 40;
+
+  // --- assembly steps -------------------------------------------------------
+  const steps = arr(opts.steps);
+  if (steps.length) {
+    body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#d8d8d8" stroke-width="1"/>`);
+    y += 26;
+    body.push(`<text x="${MARGIN}" y="${y}" font-size="15" font-weight="bold" fill="#2b5d8a">Assembly steps</text>`);
+    y += 24;
+    const maxChars = Math.floor((PAGE_W - MARGIN * 2 - 26) / 7.3); // ~7.3px per char at 13px
+    steps.forEach((s, i) => {
+      const lines = wrapLines(`${i + 1}. ${s}`, maxChars);
+      lines.forEach((ln, li) => {
+        const tx = MARGIN + (li === 0 ? 0 : 22); // hang-indent continuation lines
+        body.push(`<text x="${tx}" y="${round(y, 1)}" font-size="13" fill="#1a1a1a">${xesc(ln)}</text>`);
+        y += 19;
+      });
+      y += 5;
+    });
+  }
+
+  y += MARGIN;
+  return svgDoc(PAGE_W, y, body.join('\n'));
+}
+
+/** Greedy word-wrap into lines of at most `maxChars` characters. */
+function wrapLines(text, maxChars) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if (!cur) { cur = w; continue; }
+    if ((cur + ' ' + w).length > maxChars) { lines.push(cur); cur = w; }
+    else cur += ' ' + w;
+  }
+  if (cur) lines.push(cur);
+  return lines;
 }
 
 // ----------------------------------------------------------------------------

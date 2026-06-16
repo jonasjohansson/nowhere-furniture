@@ -19,7 +19,7 @@ import {
   ERGO, panel,
   faceJoint, panelEdgeJoint,
   SHEETS,
-} from '../engineering.js?v=14';
+} from '../engineering.js?v=15';
 
 const PLY = (key) => SHEETS[key].thickness;   // sheet thickness in mm
 
@@ -44,11 +44,11 @@ export const INTERLOCK = [
     params: [
       { key: 'seatH', label: 'Seat height', min: 360, max: 520, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
       { key: 'len',   label: 'Top width (tabs = ¼)', min: 400, max: 900, step: 20, default: 600, unit: 'mm' },
-      { key: 'depth', label: 'Top depth',   min: 220, max: 500, step: 10, default: 300, unit: 'mm' },
+      { key: 'depth', label: 'Top depth',   min: 220, max: 500, step: 10, default: 400, unit: 'mm' },
       { key: 'tabD',  label: 'Tab depth',   min: 18,  max: 60,  step: 2,  default: 18,  unit: 'mm' },
-      { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 6, step: 1, default: 1, unit: '' },
+      { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 6, step: 1, default: 6, unit: '' },
       { key: 'gap',   label: 'Gap between units', min: 0, max: 400, step: 10, default: 0, unit: 'mm' },
-      { key: 'railH', label: 'Cross-rail height', min: 40, max: 160, step: 10, default: 80, unit: 'mm' },
+      { key: 'railH', label: 'Cross-rail height', min: 40, max: 160, step: 10, default: 120, unit: 'mm' },
     ],
 
     build(p) {
