@@ -48,6 +48,7 @@ export const INTERLOCK = [
       { key: 'tabD',  label: 'Tab depth',   min: 18,  max: 60,  step: 2,  default: 18,  unit: 'mm' },
       { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 6, step: 1, default: 1, unit: '' },
       { key: 'gap',   label: 'Gap between units', min: 0, max: 400, step: 10, default: 0, unit: 'mm' },
+      { key: 'railH', label: 'Cross-rail height', min: 40, max: 160, step: 10, default: 80, unit: 'mm' },
     ],
 
     build(p) {
@@ -70,7 +71,7 @@ export const INTERLOCK = [
       const gap    = p.len / 4;                             // tab = gap → interlock meshes
       const legXs  = [-3 * p.len / 8, p.len / 8];           // segment-1 (front) and segment-3 centres
 
-      const aprH    = 80;
+      const aprH    = p.railH || 80;                       // cross-rail board height (settable)
       const aprY    = (seatTop - topThk) - aprH / 2;
       const railLen = p.depth;
 

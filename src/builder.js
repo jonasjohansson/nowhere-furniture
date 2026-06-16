@@ -150,7 +150,11 @@ export class Builder {
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       const rt = this._pmrem.fromEquirectangular(hdr);
       this.scene.environment = rt.texture;        // reflections + IBL on the wood
-      this.scene.environmentIntensity = 0.9;
+      // The bright clear-sky HDRI must be kept SUBTLE — at full strength it over-
+      // lights the ground + wood to a cool white wash (the old RoomEnvironment was
+      // baked dim at 0.04). Low intensity = soft realistic reflections while the
+      // warm directional + hemisphere rig stays the main light.
+      this.scene.environmentIntensity = 0.28;
       // NB: we DON'T set scene.background to the HDRI — the warm sand background
       // (set above) stays, so there's no jarring sky pop-in and the viewport reads
       // cohesively with the minimal desert UI. The HDRI only lights the wood.

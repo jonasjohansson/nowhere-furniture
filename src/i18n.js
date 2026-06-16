@@ -65,6 +65,26 @@ export function setLang(l) {
 export function t(key) {
   return (STRINGS[_lang] && STRINGS[_lang][key]) ?? STRINGS.en[key] ?? key;
 }
+// Parametric-control labels (across all designs) → Catalan. Unmapped labels fall
+// back to the authored English.
+const PARAM_LABELS_CA = {
+  'Seat height': 'Alçada del seient',
+  'Top width (tabs = ¼)': 'Amplada del tauler (pestanyes = ¼)',
+  'Top width': 'Amplada del tauler', 'Top length': 'Llargada del tauler', 'Top depth': 'Fondària del tauler',
+  'Tab width': 'Amplada de la pestanya', 'Tab depth': 'Fondària de la pestanya',
+  'Units (side-by-side, rotated)': 'Unitats (de costat, girades)', 'Units': 'Unitats',
+  'Gap between units': 'Separació entre unitats', 'Cross-rail height': 'Alçada de la travessa',
+  'Length': 'Llargada', 'Width': 'Amplada', 'Depth': 'Fondària', 'Height': 'Alçada',
+  'Seat depth': 'Fondària del seient', 'Seat width': 'Amplada del seient', 'Seat size': 'Mida del seient',
+  'Back height': 'Alçada del respatller', 'Back rake': 'Inclinació del respatller', 'Back angle': 'Angle del respatller',
+  'Slat gap': 'Separació dels llistons', 'Leg overhang': 'Voladís de la pota', 'Leg width': 'Amplada de la pota',
+  'Recline': 'Reclinació', 'Stack': 'Apilament', 'Splay': 'Obertura',
+};
+/** Translate a design's parametric-control label for the current language. */
+export function tParam(label) {
+  return (_lang === 'ca' && PARAM_LABELS_CA[label]) || label;
+}
+
 /** Set textContent on every [data-i18n] element (and title on [data-i18n-title]). */
 export function applyStatic(root = document) {
   for (const el of root.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);

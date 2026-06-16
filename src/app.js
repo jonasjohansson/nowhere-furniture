@@ -6,7 +6,7 @@ import { CATALOG } from './catalog.js';
 import { computeBOM, bomSummaryLine } from './bom.js';
 import { SHEETS, TIMBER } from './stock.js';
 import { MATERIALS } from './materials.js';
-import { t, getLang, setLang, applyStatic } from './i18n.js';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js';
 import {
   bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
@@ -96,7 +96,7 @@ function renderParams() {
     const row = document.createElement('div');
     row.className = 'param';
     row.innerHTML = `
-      <div class="top"><span>${p.label}</span>
+      <div class="top"><span>${tParam(p.label)}</span>
         <span class="val"><span data-val="${p.key}">${currentParams[p.key]}</span> ${p.unit || ''}</span></div>
       <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${currentParams[p.key]}" data-key="${p.key}" />`;
     const range = row.querySelector('input');
@@ -187,8 +187,10 @@ function recomputeBOM() {
   }
 
   out.push(`<div class="grand"><span>${t('bTotal')}</span><span>${fmtSEK(bom.totals.grandCost)}</span></div>`);
-  if (bom.warnings && bom.warnings.length)
-    out.push(`<div class="warn">⚠ ${bom.warnings.join('<br>⚠ ')}</div>`);
+  if (bom.warnings && bom.warnings.length) {
+    const w = bom.warnings.map((x) => x.startsWith('Prices are rough') ? t('wasteNote') : x);
+    out.push(`<div class="warn">⚠ ${w.join('<br>⚠ ')}</div>`);
+  }
 
   $('bom').innerHTML = out.join('');
 }
@@ -418,7 +420,7 @@ function refreshLang() {
   $('lang-toggle').textContent = getLang() === 'en' ? 'CA' : 'EN';
   const autoOpt = $('material-select').querySelector('option[value=""]');
   if (autoOpt) autoOpt.textContent = t('matAuto');
-  if (currentDesign) { renderDesignHead(); renderBuildInfo(currentBuild); }
+  if (currentDesign) { renderDesignHead(); renderParams(); renderBuildInfo(currentBuild); }
   recomputeBOM();
   renderInspector(builder.getSelected());
 }
