@@ -25,11 +25,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js?v=9';
-import { disposeWoodCache } from './wood.js?v=9';
-import { materialMaterial } from './materials.js?v=9';
-import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=9';
+import { SHEETS, TIMBER, MM } from './stock.js?v=10';
+import { disposeWoodCache } from './wood.js?v=10';
+import { materialMaterial } from './materials.js?v=10';
+import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=10';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -124,20 +125,33 @@ export class Builder {
     // ACES filmic tonemapping gives the warm, slightly filmic daylight roll-off
     // that keeps highlights on the wood from blowing out to white.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 0.95;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.touchAction = 'none';
 
     // ---- scene -----------------------------------------------------------
     this.scene = new THREE.Scene();
-    // Warm desert-haze backdrop: a vertical gradient I control end to end (light
-    // warm sand up top -> deeper amber at the horizon). Unlike an HDRI sky this
-    // never shows a cool twilight zenith — it's warm everywhere.
-    this._bgTex = this._makeBackgroundGradient();
-    this.scene.background = this._bgTex;
-    // Soft desert haze — fades the far ground into the warm horizon for depth.
-    this.scene.fog = new THREE.Fog(0xd2af80, 6, 26);
+    // Desert vibe copied from the balena-voladora ("whale") project: a FogExp2
+    // dust the ground fogs INTO, matched to a gradient sky-dome horizon, so
+    // ground -> haze -> sky read as one seamless desert with no horizon line.
+    const FOG_COLOR = 0x7a6650;   // warm dust at the horizon
+    const SKY_TOP   = 0x9a9286;   // light warm sky overhead
+    this.scene.background = new THREE.Color(FOG_COLOR);
+    this.scene.fog = new THREE.FogExp2(FOG_COLOR, 0.07);
+    // Gradient sky dome (warm dust horizon -> light sky overhead). fog:false so it
+    // stays a clean gradient; a wide soft horizon band keeps lots of pure fog
+    // colour around the horizon so the fogged ground meets it with no edge.
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: { uTop: { value: new THREE.Color(SKY_TOP) }, uHorizon: { value: new THREE.Color(FOG_COLOR) } },
+      vertexShader: 'varying vec3 vW; void main(){ vW = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+      fragmentShader: 'uniform vec3 uTop; uniform vec3 uHorizon; varying vec3 vW; void main(){ float h = normalize(vW).y; float t = smoothstep(-0.05, 0.6, h); gl_FragColor = vec4(mix(uHorizon, uTop, t), 1.0); }',
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(60, 32, 16), skyMat);
+    sky.frustumCulled = false;
+    this.scene.add(sky);
+    this.sky = sky;
 
     // ---- camera ----------------------------------------------------------
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -158,7 +172,7 @@ export class Builder {
     const _room = new RoomEnvironment();
     this._envRT = this._pmrem.fromScene(_room, 0.04);
     this.scene.environment = this._envRT.texture;
-    this.scene.environmentIntensity = 1.0;
+    this.scene.environmentIntensity = 0.75;
     _room.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
@@ -174,7 +188,7 @@ export class Builder {
       if (this._envRT) this._envRT.dispose();
       this._envRT = rt;
       this.scene.environment = rt.texture;
-      this.scene.environmentIntensity = 1.0;
+      this.scene.environmentIntensity = 0.75;
       // Background stays the warm gradient — the HDRI only LIGHTS the wood (its
       // dusk sky has a cool purple zenith we don't want behind the furniture).
       hdr.dispose();
@@ -221,21 +235,34 @@ export class Builder {
     // A warm, very lightly shaded ground plane that grounds the furniture. It
     // uses a MeshStandardMaterial (so it picks up the environment) rather than a
     // pure shadow catcher, to read as a real warm surface under the pieces.
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(120, 120),
-      // A warm desert-sand floor (subtly mottled) that the furniture sits on and
-      // casts shadows onto. The fog fades its far edge into the warm horizon so
-      // ground -> haze -> sky read as one continuous desert.
-      new THREE.MeshStandardMaterial({
-        map: this._makeSandTexture(), roughness: 1.0, metalness: 0.0,
-        color: 0xd9bd91,
-      })
-    );
+    // Real PBR aerial-sand floor (Poly Haven — the same textures as the whale).
+    const sandMat = new THREE.MeshStandardMaterial({ color: 0xbfa57e, roughness: 1.0, metalness: 0.0 });
+    {
+      const tl = new THREE.TextureLoader(), exr = new EXRLoader();
+      const B = 'assets/sand/';
+      const diff = tl.load(B + 'aerial_sand_diff_2k.jpg');
+      const rough = tl.load(B + 'aerial_sand_rough_2k.jpg');
+      const nor = exr.load(B + 'aerial_sand_nor_gl_2k.exr');
+      diff.colorSpace = THREE.SRGBColorSpace;
+      const aniso = this.renderer.capabilities.getMaxAnisotropy();
+      for (const tx of [diff, rough, nor]) { tx.wrapS = tx.wrapT = THREE.RepeatWrapping; tx.repeat.set(14, 14); tx.anisotropy = aniso; }
+      sandMat.map = diff; sandMat.roughnessMap = rough; sandMat.normalMap = nor; sandMat.needsUpdate = true;
+      this._sandTex = [diff, rough, nor];
+    }
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(70, 70), sandMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = 0;
     ground.receiveShadow = true;
     this.scene.add(ground);
     this.ground = ground;
+    // Far skirt: a huge lit+fogged plane so the visible horizon is always fully-
+    // fogged ground == fog colour == sky-dome horizon — seamless, no edge line.
+    const farGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(600, 600),
+      new THREE.MeshStandardMaterial({ color: 0x6f5e44, roughness: 1.0 }));
+    farGround.rotation.x = -Math.PI / 2;
+    farGround.position.y = -0.05;
+    this.scene.add(farGround);
+    this.farGround = farGround;
 
     // A soft radial "contact shadow" decal under the furniture — a cheap
     // procedural blob texture that darkens the ground near the pieces, giving
@@ -671,6 +698,9 @@ export class Builder {
     this.orbit.dispose();
 
     if (this.grid) { this.grid.geometry.dispose(); this.grid.material.dispose(); }
+    if (this.sky) { this.sky.geometry.dispose(); this.sky.material.dispose(); }
+    if (this.farGround) { this.farGround.geometry.dispose(); this.farGround.material.dispose(); }
+    if (this._sandTex) for (const tx of this._sandTex) tx.dispose();
     this.ground.geometry.dispose();
     this.ground.material.dispose();
     this.contactShadow.geometry.dispose();

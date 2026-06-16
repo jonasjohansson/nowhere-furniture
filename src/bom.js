@@ -18,7 +18,7 @@
 import {
   SHEETS, TIMBER, SCREWS,
   lengthOf, sectionOf, stockOf, fmtSize,
-} from './stock.js?v=9';
+} from './stock.js?v=10';
 
 // ----------------------------------------------------------------------------
 // PRICING ASSUMPTION (timber) — documented choice:
@@ -455,7 +455,7 @@ function groupThousands(n) {
 // INLINE SELF-TESTS (read-only documentation of expected behaviour).
 // No framework — these are the asserts you'd get if you ran the snippets.
 //
-//  import { computeBOM, bomSummaryLine } from './bom.js?v=9';
+//  import { computeBOM, bomSummaryLine } from './bom.js?v=10';
 //
 //  // 1) Empty in -> valid empty BOM, no crash:
 //  const empty = computeBOM({ parts: [], joints: [] });
