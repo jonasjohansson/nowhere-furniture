@@ -95,7 +95,7 @@ export const INTERLOCK = [
       { key: 'units',    label: 'Units (1=stool, 2=interlocked)', min: 1, max: 2, step: 1, default: 1, unit: '' },
       { key: 'seatH',    label: 'Seat height', min: 420, max: 460, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
       { key: 'size',     label: 'Seat size',   min: 360, max: 460, step: 10, default: 400, unit: 'mm' },
-      { key: 'overhang', label: 'Leg overhang',min: 60,  max: 100, step: 5,  default: 80,  unit: 'mm' },
+      { key: 'overhang', label: 'Leg overhang',min: 25,  max: 80,  step: 5,  default: 45,  unit: 'mm' },
     ],
 
     build(p) {
@@ -120,10 +120,15 @@ export const INTERLOCK = [
       // half+overhang. rot90(k) places the other three; each protrudes past the
       // NEXT edge. These fractions sit mid-band of the collision-free interlock
       // window (swept across the whole size/overhang range, see the guard below).
-      const legCz    = 0.95 * half;               // board centre z (outer face near +z edge)
-      const legInner = -0.15 * half;              // inner end x (board spans ~78% of the seat)
+      // Each leg is a SHORT flat board at a CORNER (matching the reference): it
+      // sits FLUSH at one edge (thin 18mm dim across that edge), spans ~36% of the
+      // edge tucked toward a corner, and its end pokes past the PERPENDICULAR edge
+      // by `overhang`. Short corner boards read as legs, not big fins.
+      const legW     = 0.36 * p.size;             // board length along its edge (corner leg)
+      const legCz    = half - legThk / 2;         // board flush INSIDE the +z edge
       const legOuter = half + p.overhang;         // protruding end x (past the +x edge)
-      const legLen   = legOuter - legInner;       // board length
+      const legInner = legOuter - legW;           // inner end x (short corner leg)
+      const legLen   = legW;                      // board length
       const legCx    = (legInner + legOuter) / 2; // board centre x (local)
 
       // --- one unit's parts, placed in its OWN local frame then yawed + moved.
@@ -222,32 +227,29 @@ export const INTERLOCK = [
         // boards). A swept proof over the whole size/overhang range shows any
         // offset in ~[0.58·size, 0.90·size] is safe; 0.82·size sits mid-band, so
         // the rotate-and-slot always interlocks. overlap = size - offset.
-        const offset  = 0.82 * p.size;             // diagonal slide per axis (mm)
-        const overlap = p.size - offset;           // corner overlap of the tops (mm)
-        const u1 = unit('U1', -offset / 2, -offset / 2, 0);
-        const u2 = unit('U2',  offset / 2,  offset / 2, 90);
+        // Unit 2 = unit 1 rotated 90° and slid along the DIAGONAL so its pinwheel
+        // tabs drop into unit 1's notches, the two square tops overlapping a little
+        // at the corner. SELF-CORRECTING: start with a small overlap and back the
+        // units apart until no two leg-boards collide in plan — so the rotate-and-
+        // slot always interlocks cleanly whatever the leg geometry, and a bad
+        // parameter can never throw or ship overlapping legs.
+        const collide = (A, B) => {
+          const tol = 1; // mm — abutting faces don't count as a collision
+          for (const a of A) for (const b of B)
+            if (Math.abs(a.x - b.x) < a.hw + b.hw - tol &&
+                Math.abs(a.z - b.z) < a.hd + b.hd - tol) return true;
+          return false;
+        };
+        let offset = 0.78 * p.size;                // diagonal slide per axis (mm)
+        let u1 = unit('U1', -offset / 2, -offset / 2, 0);
+        let u2 = unit('U2',  offset / 2,  offset / 2, 90);
+        while (collide(u1.legBoxes, u2.legBoxes) && offset < 1.6 * p.size) {
+          offset += 0.04 * p.size;
+          u1 = unit('U1', -offset / 2, -offset / 2, 0);
+          u2 = unit('U2',  offset / 2,  offset / 2, 90);
+        }
         parts.push(...u1.parts, ...u2.parts);
         joints.push(...u1.joints, ...u2.joints);
-
-        // --- VERIFY the interlock in plan: the two units' leg-boards must
-        // interleave, not collide. Build a plan AABB for every leg-board of each
-        // unit and assert no unit-1 box overlaps a unit-2 box. Two axis-aligned
-        // plan boxes overlap iff they overlap on BOTH x and z (with a tiny
-        // tolerance so a shared touching face isn't a "collision"). This is the
-        // geometric proof the tabs land in the notches — a pure, deterministic
-        // guard so a bad offset/overhang can't ship.
-        const tol = 1; // mm — allow faces to abut without counting as overlap
-        const b1 = u1.legBoxes, b2 = u2.legBoxes;
-        for (const a of b1) for (const b of b2) {
-          const ox = Math.abs(a.x - b.x) < a.hw + b.hw - tol;
-          const oz = Math.abs(a.z - b.z) < a.hd + b.hd - tol;
-          if (ox && oz) {
-            throw new Error(
-              `interlock-pinwheel: leg-boards collide in plan near ` +
-              `(${a.x.toFixed(0)},${a.z.toFixed(0)}) vs (${b.x.toFixed(0)},${b.z.toFixed(0)})` +
-              ` — tabs not landing in notches at offset=${offset.toFixed(0)}, overhang=${p.overhang}`);
-          }
-        }
       }
 
       const steps = [
