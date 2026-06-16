@@ -26,9 +26,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js?v=8';
-import { disposeWoodCache } from './wood.js?v=8';
-import { materialMaterial, defaultMaterialForStock } from './materials.js?v=8';
+import { SHEETS, TIMBER, MM } from './stock.js?v=9';
+import { disposeWoodCache } from './wood.js?v=9';
+import { materialMaterial } from './materials.js?v=9';
+import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=9';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).
@@ -130,9 +131,13 @@ export class Builder {
 
     // ---- scene -----------------------------------------------------------
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xd9bd95); // warm sand-dusk (until the HDRI sky lands)
+    // Warm desert-haze backdrop: a vertical gradient I control end to end (light
+    // warm sand up top -> deeper amber at the horizon). Unlike an HDRI sky this
+    // never shows a cool twilight zenith — it's warm everywhere.
+    this._bgTex = this._makeBackgroundGradient();
+    this.scene.background = this._bgTex;
     // Soft desert haze — fades the far ground into the warm horizon for depth.
-    this.scene.fog = new THREE.Fog(0xcaa472, 6, 26);
+    this.scene.fog = new THREE.Fog(0xd2af80, 6, 26);
 
     // ---- camera ----------------------------------------------------------
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -170,12 +175,9 @@ export class Builder {
       this._envRT = rt;
       this.scene.environment = rt.texture;
       this.scene.environmentIntensity = 1.0;
-      // Show the warm dusk sky itself as a softly-blurred desert backdrop — the
-      // baseline env above means the wood is already lit, so this swap is smooth.
-      this.scene.background = hdr;
-      this.scene.backgroundBlurriness = 0.6;
-      this.scene.backgroundIntensity = 1.0;
-      this._hdrTex = hdr;
+      // Background stays the warm gradient — the HDRI only LIGHTS the wood (its
+      // dusk sky has a cool purple zenith we don't want behind the furniture).
+      hdr.dispose();
       for (const item of this.items.values()) this._applyMaterial(item);
     }, undefined, () => { /* keep the baseline env + sand background on failure */ });
 
@@ -220,11 +222,14 @@ export class Builder {
     // uses a MeshStandardMaterial (so it picks up the environment) rather than a
     // pure shadow catcher, to read as a real warm surface under the pieces.
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 40),
-      // A pure shadow CATCHER — invisible except where the furniture's shadow
-      // falls — so there's no flat pale "floor" washing the view. The pieces sit
-      // in the warm dusk haze with just a soft shadow beneath.
-      new THREE.ShadowMaterial({ opacity: 0.16, color: 0x3a2f22 })
+      new THREE.PlaneGeometry(120, 120),
+      // A warm desert-sand floor (subtly mottled) that the furniture sits on and
+      // casts shadows onto. The fog fades its far edge into the warm horizon so
+      // ground -> haze -> sky read as one continuous desert.
+      new THREE.MeshStandardMaterial({
+        map: this._makeSandTexture(), roughness: 1.0, metalness: 0.0,
+        color: 0xd9bd91,
+      })
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = 0;
@@ -659,6 +664,7 @@ export class Builder {
 
     // Free cached wood base textures held by the wood module.
     disposeWoodCache();
+    disposePhotoCache();
 
     this.gizmo.detach();
     this.gizmo.dispose();
@@ -675,6 +681,7 @@ export class Builder {
     if (this._envRT) this._envRT.dispose();
     if (this._hdrTex) this._hdrTex.dispose();
     if (this._pmrem) this._pmrem.dispose();
+    if (this._bgTex) this._bgTex.dispose();
     this.scene.environment = null;
     this.scene.background = null;
 
@@ -1033,15 +1040,15 @@ export class Builder {
     // default per stock) and returns authentic per-face grain (long grain on the
     // 4 sides, end grain on the 2 cut faces) as a 6-material array, grain along
     // longAxis, with deterministic per-board variation.
-    const matId = this._materialId || defaultMaterialForStock(item.spec.stock);
-    const mat = materialMaterial(THREE, matId, {
-      stockKey: item.spec.stock,
-      baseColor: color,
-      longAxis,
-      sizeMM: { w, h, d },
-      seed: String(item.seed),
-      environment: this.scene.environment,
-    });
+    const opts = {
+      stockKey: item.spec.stock, baseColor: color, longAxis,
+      sizeMM: { w, h, d }, seed: String(item.seed), environment: this.scene.environment,
+    };
+    // Default = realistic PHOTOGRAPHIC wood (CC0 PBR textures). When the user
+    // picks a specific material the procedural species/finish library takes over.
+    const mat = this._materialId
+      ? materialMaterial(THREE, this._materialId, opts)
+      : woodPhotoMaterial(THREE, opts);
 
     this._disposeMaterial(item.mesh.material);
     item.mesh.material = mat;
@@ -1166,6 +1173,47 @@ export class Builder {
 
   /** Build a soft radial blob texture used as a fake contact/ambient shadow
    *  under the assembly. Pure procedural gradient — deterministic, no random. */
+  /** A warm vertical gradient backdrop — light sand at top, deeper amber at the
+   *  horizon. Warm everywhere (no cool sky), full control. */
+  _makeBackgroundGradient() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 4; canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0.0, '#f1e8d6');
+    g.addColorStop(0.45, '#e8d6b6');
+    g.addColorStop(0.8, '#dcbb8e');
+    g.addColorStop(1.0, '#d0a677');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 4, 256);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /** A subtly mottled warm desert-sand texture for the ground plane. */
+  _makeSandTexture() {
+    const s = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = s;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#d9bd91';
+    ctx.fillRect(0, 0, s, s);
+    const rnd = mulberry32(0x5a17d3);
+    const img = ctx.getImageData(0, 0, s, s);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (rnd() - 0.5) * 20;
+      d[i] += n; d[i + 1] += n * 0.9; d[i + 2] += n * 0.7;
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(48, 48);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
   _makeContactShadowTexture() {
     const size = 256;
     const canvas = document.createElement('canvas');

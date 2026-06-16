@@ -31,7 +31,7 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=8';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=9';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities

@@ -17,8 +17,8 @@
 // it stays cheap to import and the heavy work stays cached in wood.js.
 // ============================================================================
 
-import { createWoodMaterial } from './wood.js?v=8';
-import { SHEETS } from './stock.js?v=8';
+import { createWoodMaterial } from './wood.js?v=9';
+import { SHEETS } from './stock.js?v=9';
 
 // ----------------------------------------------------------------------------
 // THE LIBRARY
