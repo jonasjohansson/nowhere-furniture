@@ -43,82 +43,92 @@ export const INTERLOCK = [
     buildTime: '45–60 min',
     params: [
       { key: 'seatH', label: 'Seat height', min: 420, max: 460, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
-      { key: 'len',   label: 'Top length',  min: 440, max: 700, step: 10, default: 520, unit: 'mm' },
-      { key: 'depth', label: 'Top depth',   min: 220, max: 360, step: 10, default: 280, unit: 'mm' },
-      { key: 'legW',  label: 'Leg width',   min: 70,  max: 200, step: 5,  default: 130, unit: 'mm' },
+      { key: 'len',   label: 'Top length',  min: 440, max: 760, step: 20, default: 600, unit: 'mm' },
+      { key: 'depth', label: 'Top depth',   min: 220, max: 360, step: 10, default: 300, unit: 'mm' },
+      { key: 'units', label: 'Units (rotated bench)', min: 1, max: 5, step: 1, default: 1, unit: '' },
     ],
 
     build(p) {
-      const topStock = 'ply18';   // top board
-      const legStock = 'ply18';   // vertical board-legs
-      const aprStock = 'ply18';   // underside aprons
+      const topStock = 'ply18', legStock = 'ply18', aprStock = 'ply18';
+      const topThk = PLY(topStock), legThk = PLY(legStock), aprThk = PLY(aprStock);
 
-      const topThk = PLY(topStock);   // 18
-      const legThk = PLY(legStock);   // 18 (thin dim of each vertical board)
-      const aprThk = PLY(aprStock);   // 18
+      const seatTop = p.seatH;
+      const topY    = seatTop - topThk / 2;
+      const hz      = p.depth / 2;
+      const legZ    = hz + legThk / 2;          // leg flanks the long edge, inner face at hz
+      const legH    = seatTop;                  // leg top flush with the surface
+      const legY    = legH / 2;
 
-      const seatTop = p.seatH;                 // top SURFACE height
-      const topY    = seatTop - topThk / 2;    // top board centre
+      // Legs are 1/4 of the top length, laid out TAB-GAP-TAB-GAP from the front:
+      // a leg fills segment 1 (flush with the front end) and segment 3, leaving
+      // gaps at 2 and 4. A copy rotated 180° drops its tabs into those gaps, so a
+      // row of units interlocks into a bench (the `units` param repeats it).
+      const legW  = p.len / 4;
+      const legXs = [-3 * p.len / 8, p.len / 8]; // centres of segments 1 and 3
 
-      const hx = p.len / 2;                    // top half-length (x)
-      const hz = p.depth / 2;                  // top half-depth (z)
+      const aprH    = 80;
+      const aprY    = (seatTop - topThk) - aprH / 2;
+      const railLen = p.depth;
 
-      // Legs flank the two long (±z) edges: inner face flush with the edge, so the
-      // board sits just OUTBOARD of the top, rising the full height to the surface.
-      const legZ   = hz + legThk / 2;          // leg centre z (inner face at hz)
-      const endIn  = Math.max(20, Math.round(p.len * 0.06)); // top overhang past the end legs
-      // Clamp leg width so the two legs per side leave a real apron between them.
-      const legW   = Math.min(p.legW, hx - endIn - 40);
-      const legX   = hx - legW / 2 - endIn;    // leg centre x (two per side, near the ends)
-      const legH   = seatTop;                  // full height: leg top flush with the surface
-      const legY   = legH / 2;
+      // One unit, built in a LOCAL frame centred on the origin.
+      function baseUnit() {
+        const ps = [];
+        ps.push(panel('TOP', 'Top board', topStock, p.len, p.depth, 'xz',
+          { x: 0, y: topY, z: 0 }, 'Top'));
+        for (const sz of [-1, 1]) legXs.forEach((lx, i) => {
+          ps.push(panel(`LEG-${sz < 0 ? 'B' : 'F'}${i + 1}`, 'Board leg', legStock,
+            legW, legH, 'xy', { x: lx, y: legY, z: sz * legZ }, 'Legs'));
+        });
+        legXs.forEach((lx, i) => {
+          ps.push(panel(`RAIL-${i + 1}`, 'Cross rail', aprStock, railLen, aprH, 'zy',
+            { x: lx, y: aprY, z: 0 }, 'Cross rails'));
+        });
+        return ps;
+      }
 
-      // Cross-rails sit BETWEEN the legs, UNDERNEATH the top: each spans the depth
-      // between the front+back leg at one end, tying the two sides together. The
-      // top rests on the two rails.
-      const aprH    = 80;                                  // rail board height
-      const aprTopY = seatTop - topThk;                    // rail top under the board
-      const aprY    = aprTopY - aprH / 2;
-
+      // Repeat into a bench: each copy is offset by one top-length along x and
+      // ROTATED 180° about the vertical (the rotation offset the user wants), so
+      // neighbouring tab-gap legs interlock. The whole row is centred on origin.
+      const units = Math.max(1, Math.round(p.units || 1));
+      const base  = baseUnit();
+      const x0    = -((units - 1) * p.len) / 2;
       const parts = [];
-      const joints = [];
-
-      // TOP — flat board.
-      parts.push(panel('TOP', 'Top board', topStock, p.len, p.depth, 'xz',
-        { x: 0, y: topY, z: 0 }, 'Top'));
-
-      // FOUR VERTICAL BOARD-LEGS — flanking the long edges, near each end.
-      for (const sz of [-1, 1]) {
-        for (const sx of [-1, 1]) {
-          const tag = `LEG-${sz < 0 ? 'B' : 'F'}${sx < 0 ? 'L' : 'R'}`;
-          parts.push(panel(tag, 'Board leg', legStock, legW, legH, 'xy',
-            { x: sx * legX, y: legY, z: sz * legZ }, 'Legs'));
-          joints.push(faceJoint(legThk, 3, 'leg screwed to the top edge + the end cross-rail'));
+      for (let k = 0; k < units; k++) {
+        const flip = (k % 2) === 1;          // alternate 180° rotation
+        const ox   = x0 + k * p.len;
+        for (const part of base) {
+          parts.push({
+            ...part,
+            ref: `U${k + 1}-${part.ref}`,
+            size: { ...part.size },
+            pos: { x: (flip ? -part.pos.x : part.pos.x) + ox, y: part.pos.y,
+                   z: flip ? -part.pos.z : part.pos.z },
+            rot: { x: 0, y: flip ? 180 : 0, z: 0 },
+          });
         }
       }
 
-      // TWO END CROSS-RAILS — between the front+back legs at each end, underneath.
-      const railLen = p.depth;                             // between the long-edge leg inner faces
-      for (const sx of [-1, 1]) {
-        const tag = `RAIL-${sx < 0 ? 'L' : 'R'}`;
-        parts.push(panel(tag, 'Cross rail', aprStock, railLen, aprH, 'zy',
-          { x: sx * legX, y: aprY, z: 0 }, 'Cross rails'));
-        joints.push(faceJoint(aprThk, 4, 'cross-rail screwed into the front + back legs, 2 per end'));
+      const joints = [];
+      for (let k = 0; k < units; k++) {
+        joints.push(faceJoint(legThk, 3 * 4, 'four board-legs screwed to the top edges + cross-rails'));
+        joints.push(faceJoint(aprThk, 4 * 2, 'two cross-rails screwed into the legs, 2 per end'));
+        joints.push(panelEdgeJoint(topStock, 2 * p.depth, 200, 'top screwed down to both cross-rails'));
       }
-      // Top screwed down onto the two cross-rails.
-      joints.push(panelEdgeJoint(topStock, 2 * p.depth, 200, 'top board screwed down to both cross-rails'));
 
+      const seg = Math.round(legW);
       const steps = [
-        `Cut from one ply18 sheet: 1 top board (${p.len}×${p.depth}), 4 board-legs (${legW}×${legH}), 2 cross-rails (${railLen}×${aprH}).`,
-        'Make the two END frames: stand the front + back leg of one end and screw a cross-rail BETWEEN them just under where the top will sit. Two identical end frames.',
-        'Stand the two end frames the top length apart and drop the top board on so it rests on both cross-rails, its long edges flush with the leg outer faces.',
-        'Screw through each leg into the top edge (3 per leg) and down through the top into both cross-rails — all screws from outside, Mari-style.',
-        'Check it sits flat and rock-test; ease the sharp top edges. Oil for outdoor use.',
+        `Cut from ply18: ${units} top board(s) ${p.len}×${p.depth}, ${4 * units} board-legs ${seg}×${legH}, ${2 * units} cross-rails ${railLen}×${aprH}.`,
+        `Lay the legs along each long edge TAB-GAP-TAB-GAP from the front end: ${seg}mm leg, ${seg}mm gap, ${seg}mm leg, ${seg}mm gap. Both long edges match.`,
+        'Per unit: make two end frames (front+back leg tied by a cross-rail between them under the top), stand them, drop the top on so it rests on both rails. Screw from outside.',
+        units > 1
+          ? 'The row alternates a 180° rotation each unit and butts them together so the tabs of one meet the gaps of the next — one continuous bench.'
+          : 'To grow a bench: duplicate the stool, rotate the copy 180°, and butt it on so its tabs drop into this one’s gaps.',
+        'Check it sits flat, ease the edges, oil for outdoor use.',
       ];
       const notes = [
-        'Two end frames (each = two legs + a cross-rail between them) tied by the top board make a rigid box — the cross-rails stop the legs splaying.',
-        'All one ply18 sheet: top + 4 legs + 2 cross-rails nest from a single sheet with little waste.',
-        'Light enough to move but a gust can still walk it — weight it or peg a foot in open desert wind.',
+        'Legs are a quarter of the top length in a tab-gap-tab-gap rhythm, so a 180°-rotated copy interlocks: one unit is a stool, a row is a bench, all from one part.',
+        'All ply18: tops, legs and cross-rails nest from sheets with little waste.',
+        'A butted row is heavy and stable; a lone stool can still walk in a gust — weight or peg it.',
       ];
 
       return { parts, joints, steps, notes };
