@@ -42,29 +42,34 @@ export const INTERLOCK = [
     difficulty: 'Easy',
     buildTime: '45–60 min',
     params: [
-      { key: 'seatH', label: 'Seat height', min: 420, max: 460, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
-      { key: 'len',   label: 'Top width (legs = ¼)', min: 400, max: 800, step: 20, default: 600, unit: 'mm' },
-      { key: 'depth', label: 'Top depth',   min: 220, max: 400, step: 10, default: 300, unit: 'mm' },
-      { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 5, step: 1, default: 1, unit: '' },
+      { key: 'seatH', label: 'Seat height', min: 360, max: 520, step: 5,  default: ERGO.stool.seatH, unit: 'mm' },
+      { key: 'len',   label: 'Top width',   min: 400, max: 900, step: 20, default: 600, unit: 'mm' },
+      { key: 'depth', label: 'Top depth',   min: 220, max: 500, step: 10, default: 300, unit: 'mm' },
+      { key: 'tabW',  label: 'Tab width',   min: 60,  max: 260, step: 10, default: 150, unit: 'mm' },
+      { key: 'tabD',  label: 'Tab depth',   min: 18,  max: 60,  step: 2,  default: 18,  unit: 'mm' },
+      { key: 'units', label: 'Units (side-by-side, rotated)', min: 1, max: 6, step: 1, default: 1, unit: '' },
     ],
 
     build(p) {
       const topStock = 'ply18', legStock = 'ply18', aprStock = 'ply18';
-      const topThk = PLY(topStock), legThk = PLY(legStock), aprThk = PLY(aprStock);
+      const topThk = PLY(topStock), aprThk = PLY(aprStock);
 
       const seatTop = p.seatH;
       const topY    = seatTop - topThk / 2;
       const hz      = p.depth / 2;
-      const legZ    = hz + legThk / 2;          // leg flanks the long edge, inner face at hz
       const legH    = seatTop;                  // leg top flush with the surface
       const legY    = legH / 2;
 
-      // Legs are 1/4 of the top length, laid out TAB-GAP-TAB-GAP from the front:
-      // a leg fills segment 1 (flush with the front end) and segment 3, leaving
-      // gaps at 2 and 4. A copy rotated 180° drops its tabs into those gaps, so a
-      // row of units interlocks into a bench (the `units` param repeats it).
-      const legW  = p.len / 4;
-      const legXs = [-3 * p.len / 8, p.len / 8]; // centres of segments 1 and 3
+      // Tabs/legs are fully settable: width along the edge = p.tabW, thickness
+      // front-to-back = p.tabD. Laid out TAB-GAP-TAB-GAP from the front (leg, gap,
+      // leg, gap). The side-by-side 180°-rotated interlock is EXACT when tab width
+      // = gap = top width / 4 (e.g. top 600 -> tabs 150); other tab widths still
+      // build, the neighbour just meets them a little off.
+      const legThk = Math.max(12, p.tabD || 18);            // leg thickness (z)
+      const legZ   = hz + legThk / 2;                       // leg flanks the long edge
+      const legW   = Math.min(p.tabW, p.len / 2 - 10);      // tab width (clamped to fit two)
+      const gap    = Math.max(0, (p.len - 2 * legW) / 2);   // gap between the two tabs
+      const legXs  = [-p.len / 2 + legW / 2, -p.len / 2 + 1.5 * legW + gap];
 
       const aprH    = 80;
       const aprY    = (seatTop - topThk) - aprH / 2;
@@ -80,8 +85,13 @@ export const INTERLOCK = [
         ps.push(panel('TOP', 'Top board', topStock, p.len, p.depth, 'xz',
           { x: 0, y: topY, z: 0 }, 'Top'));
         for (const sz of [-1, 1]) legXs.forEach((lx, i) => {
-          ps.push({ ...panel(`LEG-${sz < 0 ? 'B' : 'F'}${i + 1}`, 'Board leg', legStock,
-            legW, legH, 'xy', { x: lx, y: legY, z: sz * legZ }, 'Legs'), color: TAB_HUE });
+          // Built directly (not via panel()) so the tab DEPTH (z thickness) is
+          // settable rather than locked to the sheet thickness.
+          ps.push({ ref: `LEG-${sz < 0 ? 'B' : 'F'}${i + 1}`, name: 'Board leg',
+            material: 'sheet', stock: legStock,
+            size: { w: legW, h: legH, d: legThk },
+            pos: { x: lx, y: legY, z: sz * legZ }, rot: { x: 0, y: 0, z: 0 },
+            group: 'Legs', color: TAB_HUE });
         });
         legXs.forEach((lx, i) => {
           ps.push(panel(`RAIL-${i + 1}`, 'Cross rail', aprStock, railLen, aprH, 'zy',
@@ -123,8 +133,8 @@ export const INTERLOCK = [
 
       const seg = Math.round(legW);
       const steps = [
-        `Cut from ply18: ${units} top board(s) ${p.len}×${p.depth}, ${4 * units} board-legs ${seg}×${legH}, ${2 * units} cross-rails ${railLen}×${aprH}.`,
-        `Lay the legs along each long edge TAB-GAP-TAB-GAP from the front end: ${seg}mm leg, ${seg}mm gap, ${seg}mm leg, ${seg}mm gap. Both long edges match.`,
+        `Cut from ply18: ${units} top board(s) ${p.len}×${p.depth}, ${4 * units} board-legs ${seg}×${legH}×${legThk}, ${2 * units} cross-rails ${railLen}×${aprH}.`,
+        `Lay the legs along each long edge TAB-GAP-TAB-GAP from the front: ${seg}mm tab, ${Math.round(gap)}mm gap, ${seg}mm tab, ${Math.round(gap)}mm gap (tabs ${legThk}mm thick). Both long edges match.`,
         'Per unit: make two end frames (front+back leg tied by a cross-rail between them under the top), stand them, drop the top on so it rests on both rails. Screw from outside.',
         units > 1
           ? 'The row alternates a 180° rotation each unit and butts them together so the tabs of one meet the gaps of the next — one continuous bench.'

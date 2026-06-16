@@ -11,5 +11,5 @@ import { MODULAR } from './designs/modular.js';
 import { INTERLOCK } from './designs/interlock.js';
 import { HORSE } from './designs/horse.js';
 
-export const CATALOG = [...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS, ...MODULAR, ...INTERLOCK, ...HORSE];
+export const CATALOG = [...INTERLOCK, ...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS, ...MODULAR, ...HORSE];
 export default CATALOG;
