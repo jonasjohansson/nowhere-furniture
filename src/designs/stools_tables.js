@@ -22,7 +22,7 @@ import {
   ERGO, beam, plank, leg, panel, cleat, frameBase, slatField,
   buttJoint, panelEdgeJoint, faceJoint, panelSupportSpacing,
   difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=20';
+} from '../engineering.js?v=21';
 
 // Small local readability helpers (pure lookups, not box-builders).
 const PLY = (key) => SHEETS[key].thickness;       // sheet thickness in mm
@@ -324,13 +324,20 @@ export const STOOLS = [
       const bearerTopY = apronTopY;                   // flush with the apron top
       const bearerY = bearerTopY - bearerVert / 2;    // centre of the bearer
       const bearerLen = p.width;                       // full width — catches all planks
-      // how many bearers: ends sit just inboard of the short-end aprons, plus
-      // enough intermediate bearers that no plank free-spans more than ~600mm.
-      const endInset = SEC(apronStock).w + 20;        // clear the short-end aprons
-      const innerLen = p.len - 2 * endInset;          // clear length between end bearers
-      const nBearers = Math.max(2, Math.ceil(innerLen / 600) + 1);
+      const bearerDepth = Math.max(bearerSec.w, bearerSec.h); // 95 — z-extent of an x-beam
+      // The cross-bearers cross the two long side aprons and are screwed into them
+      // where they meet, so every bearer must land WITHIN the side aprons' length —
+      // an end bearer hung out past the apron ends would carry the top on nothing.
+      // frameBase makes each side apron (d - 2*leg - 2*inset) long, centred. The
+      // end bearers sit one half-bearer-depth inboard of the apron ends so they
+      // rest fully on the side aprons; intermediate bearers are spaced so no plank
+      // free-spans more than ~600mm (the planks lie FLAT and so are less stiff).
+      const sideApronHalf = (p.len - 2 * SEC(legStock).w - 2 * inset) / 2;
+      const bearerReach = sideApronHalf - bearerDepth / 2; // outermost bearer centre
+      const bearerSpan = 2 * bearerReach;             // end-bearer to end-bearer
+      const nBearers = Math.max(2, Math.ceil(bearerSpan / 600) + 1);
       for (let i = 0; i < nBearers; i++) {
-        const z = -innerLen / 2 + (nBearers > 1 ? (innerLen * i) / (nBearers - 1) : 0);
+        const z = -bearerReach + (nBearers > 1 ? (bearerSpan * i) / (nBearers - 1) : 0);
         parts.push(beam(`BEARER-${i + 1}`, `Cross-bearer ${i + 1}`, apronStock,
           bearerLen, 'x', { x: 0, y: bearerY, z }, 'Bearers'));
       }
@@ -358,8 +365,13 @@ export const STOOLS = [
       // the short-end aprons, so they drop between the aprons and locate the top.
       // This is what makes the top KNOCK-DOWN: no glue, lift it straight up.
       const cleatLen = p.width - 2 * SEC(apronStock).w - 40;
-      const cleatH = SEC(cleatStock).h;
-      const cleatY = apronTopY - cleatH / 2;          // hangs just under the planks
+      // A cleat laid along x renders its section.w on the vertical axis (beam()
+      // puts the first section dim on the cross-axis), so the REAL vertical height
+      // of a reglar34x45 cleat run along x is 34, not section.h (45). Use the real
+      // height so the cleat top meets the plank underside and is actually screwed
+      // up into it — using the wrong dim floats the cleat a few mm clear of the top.
+      const cleatVert = Math.min(SEC(cleatStock).w, SEC(cleatStock).h); // 34 vertical
+      const cleatY = apronTopY - cleatVert / 2;       // cleat top flush with plank underside
       const cleatZ = p.len / 2 - SEC(apronStock).w - 60;
       for (const ze of [-1, 1]) {
         parts.push(cleat(`CLEAT-${ze < 0 ? 'A' : 'B'}`, cleatStock,

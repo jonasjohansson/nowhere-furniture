@@ -21,7 +21,7 @@ import {
   ERGO, beam, leg, panel, cleat, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   reviewBuild, difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=20';
+} from '../engineering.js?v=21';
 
 // ----------------------------------------------------------------------------
 // Tiny local conveniences (pure). Keep build() functions readable.
@@ -298,6 +298,7 @@ export const BENCHES = [
 
       const legSec    = SEC(legStock);    // {45,70}
       const bearerSec = SEC(bearerStock); // {45,95}
+      const braceSec  = SEC(braceStock);  // {45,45}
       const slatSec   = SEC(slatStock);   // {45,70}
       const slatThick = slatSec.w;        // 45 flat
 
@@ -312,15 +313,32 @@ export const BENCHES = [
       const frontZ  =  p.depth / 2 - legSec.w / 2;  // front leg line
       const backZ   = -p.depth / 2 + legSec.w / 2;  // back post line (at seat)
 
-      // Back rake: posts lean back by (backAngle-90)° about their seat-level
-      // pivot. Positive backAngle>90 => top travels in -z (rearward). We model
-      // the lean as a Z rotation? No — the post runs in the Y-Z plane, so the
-      // rake is a rotation about the X axis. rot.x tips the top rearward.
+      // Back rake: the post leans rearward by (backAngle-90)° ABOUT ITS SEAT-LEVEL
+      // PIVOT. That pivot is locked to (z=backZ, y=seatTop) — the back corner of
+      // the seat frame — so the post ALWAYS meets the seat bearer there, whatever
+      // the rake. The post runs in the Y-Z plane; the lean is a rotation about X
+      // (rot.x). Positive rake => the part of the post ABOVE the seat travels in
+      // -z (rearward) and the part BELOW the seat travels in +z (the foot tucks
+      // forward), so the foot stays inside the depth instead of sprawling behind.
       const rake = p.backAngle - 90;                // degrees past vertical
       const rakeRad = (rake * Math.PI) / 180;
-      const postLen = (seatTop - 0) + p.backH;      // floor to back top (along post)
-      // horizontal rearward travel of the post top vs its base:
-      const topDrop = Math.sin(rakeRad) * postLen;  // how far -z the top goes
+      const cosR = Math.cos(rakeRad);
+      const sinR = Math.sin(rakeRad);
+      const postLen = seatTop + p.backH;            // floor-to-back-top along the post
+
+      // The pivot lands at length-coord lyPivot up the post (measured from the
+      // post centre). Below the pivot is the leg portion (seatTop tall along the
+      // post is seatTop/cos), above is the back portion (backH/cos). We centre
+      // the post so its pivot sits exactly on (backZ, seatTop).
+      const legRun  = seatTop / cosR;               // post length below the pivot
+      const lyPivot = postLen / 2 - legRun;         // pivot offset from post centre
+      // Post-centre world position so the pivot lands on (backZ, seatTop):
+      // a length-coord ly maps to world { y: ly*cos + cy, z: ly*sin + cz }.
+      // Require: lyPivot*cos + cy = seatTop ; lyPivot*sin + cz = backZ.
+      const postCY = seatTop - lyPivot * cosR;
+      const postCZ = backZ   - lyPivot * sinR;
+      const postCentreline = (ly) => ({ y: ly * cosR + postCY, z: ly * sinR + postCZ });
+      const postFoot = postCentreline(-postLen / 2); // foot centre (for the brace)
 
       // ---- bearers: how many across the length? -----------------------------
       const clearSpan   = p.len - 2 * legSec.w;      // seat span between end bearers
@@ -337,32 +355,43 @@ export const BENCHES = [
         { x:  frameX, tag: 'R' },
       ];
       ends.forEach(({ x, tag }) => {
-        // Front leg: vertical, floor to bearer top.
-        const frontLegLen = bearerTopY + bearerSec.h; // up to seat underside line
+        // Front leg: vertical, floor to seat top, on the front line.
         parts.push(leg(
           `FL-${tag}`, legStock, seatTop,
           { x, y: seatTop / 2, z: frontZ },
           `${tag} frame`,
         ));
-        // Back post: continuous floor -> back top, raked rearward by rot.x.
-        // Position its CENTRE so the seat-level point lands on backZ.
-        const postCY = postLen / 2; // centre height along the (near-vertical) post
+        // Back post: continuous floor -> back top, raked rearward about its
+        // seat-level pivot so it meets the bearer's back end exactly.
         parts.push({
           ...beam(`BP-${tag}`, 'Back post (compas, continuous)', legStock,
             postLen, 'y',
-            { x, y: postCY, z: backZ - topDrop / 2 },
+            { x, y: postCY, z: postCZ },
             `${tag} frame`),
           rot: { x: rake, y: 0, z: 0 }, // tip the top rearward
         });
-        // Triangulating brace: from the back-post FOOT area forward+up to the
-        // front of the seat bearer. This is the part that stops the back lever
-        // folding the bench. Runs in the Y-Z plane.
+        // Triangulating brace: a straight diagonal from the back-post FOOT up and
+        // forward to the FRONT of the seat bearer. This is the member that stops
+        // the back lever folding the bench. We compute its two endpoints, then
+        // place a beam along that line (length + rot.x derived from the geometry),
+        // so it genuinely touches both ends instead of floating.
+        const braceBackY  = postFoot.y + legSec.h / 2 + braceSec.h / 2; // sit on the post foot
+        const braceBackZ  = postFoot.z;                                 // at the foot
+        const braceFrontY = bearerY;                                    // underside of seat front
+        const braceFrontZ = frontZ;                                     // front leg line
+        const bdz = braceFrontZ - braceBackZ;       // +z run (forward)
+        const bdy = braceFrontY - braceBackY;       // +y run (up)
+        const braceLen = Math.round(Math.hypot(bdz, bdy));
+        // beam on axis 'z' with rot.x tips its z-length toward y; angle of the
+        // diagonal from the +z axis toward +y is atan2(bdy,bdz). A +rot.x maps
+        // local +z toward -y, so we negate to lift the front end up.
+        const braceDeg = -(Math.atan2(bdy, bdz) * 180) / Math.PI;
         parts.push({
           ...beam(`BR-${tag}`, 'Back brace (triangulation)', braceStock,
-            Math.round(Math.hypot(p.depth - legSec.w, bearerY - (120))), 'z',
-            { x, y: (bearerY + 120) / 2, z: 0 },
+            braceLen, 'z',
+            { x, y: (braceBackY + braceFrontY) / 2, z: (braceBackZ + braceFrontZ) / 2 },
             `${tag} frame`),
-          rot: { x: 35, y: 0, z: 0 }, // diagonal: foot-of-back to front-of-seat
+          rot: { x: braceDeg, y: 0, z: 0 },
         });
       });
       // Frame joinery: bearer into both legs, back post sister-screwed to bearer.
@@ -422,20 +451,15 @@ export const BENCHES = [
       // "staircase" bug. Instead we march UP the post's own length axis and lay
       // each slat flush, evenly spaced, with the top slat flush to the post top.
       //
-      // Post geometry, replayed exactly so members land on the real BP posts.
-      // BP is a beam on axis 'y' (length postLen), centred at
-      //   pos = { y: postLen/2, z: backZ - topDrop/2 }, rot.x = rake.
-      // A point at local length-coord `ly` (−postLen/2..+postLen/2 up the post)
-      // sits on the post CENTRELINE at:
-      const postCZ = backZ - topDrop / 2;                 // post centre z
-      const postCentreline = (ly) => ({
-        y: ly * Math.cos(rakeRad) + postLen / 2,
-        z: ly * Math.sin(rakeRad) + postCZ,
-      });
+      // Post geometry: BP is a beam on axis 'y' (length postLen), centred at
+      //   pos = { y: postCY, z: postCZ }, rot.x = rake, with its seat-level pivot
+      //   locked to (backZ, seatTop). postCentreline(ly) (defined above) maps a
+      //   length-coord ly (−postLen/2..+postLen/2 up the post) onto the post
+      //   CENTRELINE, so every back member lands on the real posts.
       // Post FRONT-face outward normal (local +z of the post, rotated by rake):
       //   local [0,0,1] -> world ( y:-sin(rake), z:+cos(rake) ).
-      const frontNy = -Math.sin(rakeRad);
-      const frontNz =  Math.cos(rakeRad);
+      const frontNy = -sinR;
+      const frontNz =  cosR;
       // Post cross-section (axis 'y' beam, stock reglar45x70): d-dim (z) = 70.
       const postHalfD = legSec.h / 2;                     // 35 (half post depth)
       // A back member, axis 'x' (stock reglar45x70): d-dim (z) = 70 -> half 35.
@@ -450,8 +474,9 @@ export const BENCHES = [
       const railLen   = p.len - 2 * legSec.w;
       const backRake  = { x: rake, y: 0, z: 0 };          // same lean as posts
       // Usable run of the back ALONG the post: from the seat-level pivot up to
-      // the post top. ly_seat = where the centreline crosses y=seatTop.
-      const lySeat = (seatTop - postLen / 2) / Math.cos(rakeRad);
+      // the post top. The centreline crosses y=seatTop exactly at the locked
+      // pivot, so ly_seat = lyPivot (no need to re-solve).
+      const lySeat = lyPivot;
       const lyTop  = postLen / 2;                          // post top
       const halfRun = slatSec.h / 2;                       // member half-length along the post (h=45)
       // Top + mid rails the slats also screw to, placed up the post by fraction.

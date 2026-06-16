@@ -20,7 +20,7 @@ import {
   ERGO, beam, plank, leg, panel, cleat, frameBase, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   panelSupportSpacing, difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=20';
+} from '../engineering.js?v=21';
 
 // Small local readability helpers (pure). Thickness/section pulled from stock so
 // a sheet part can never disagree with its material.
@@ -231,12 +231,14 @@ export const MARI = [
       joints.push(buttJoint(stringerStock, 2 * totalBearers,
         `stringer into all ${totalBearers} frames, 2 screws each`));
 
-      // Top planks: laid flat, length along z, spread across the depth (x),
-      // evenly gapped. slatField gives count + centre positions.
+      // Top planks: laid FLAT (wide face up) via plank(), length along z, spread
+      // across the depth (x), evenly gapped. beam() would stand them on edge as
+      // 70mm fins (the narrow 45 face up would be wrong); plank() puts the narrow
+      // dim (45) vertical so the seat is a real flat surface at exactly seatTop.
       const field = slatField(p.depth, plankWide, p.gap);
       const plankY = seatTop - plankThick / 2;
       field.positions.forEach((x, i) => {
-        parts.push(beam(`PLK-${i + 1}`, 'Seat plank', plankStock, p.len, 'z',
+        parts.push(plank(`PLK-${i + 1}`, 'Seat plank', plankStock, p.len, 'z',
           { x: Math.round(x), y: plankY, z: 0 }, 'Seat'));
       });
       // each plank screwed down into every cross support it crosses

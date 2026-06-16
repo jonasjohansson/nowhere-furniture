@@ -20,7 +20,7 @@ import {
   ERGO, beam, leg, panel, cleat, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=20';
+} from '../engineering.js?v=21';
 
 // Small local conveniences (kept pure). Thickness of a sheet key; section of a
 // timber key. These only READ the shared tables — they don't redefine shapes.
@@ -125,11 +125,14 @@ export const LOUNGE = [
       // ---- Back slats: spread up the BACK height, leaned to the recline angle,
       // each one landing ACROSS the two raked posts (it screws to a post at each
       // end). The slats form the reclined plane the sitter's spine rests against;
-      // the posts behind them carry the load. ----
-      const back = slatField(p.backH, slatW, p.gap);
+      // the posts behind them carry the load. The field starts at slatW/2 above
+      // seat level (axisStart) so the whole back RISES from the seat's rear edge
+      // upward — without this, slatField centres the field on 0 and half the back
+      // slats would sink below the seat and poke out in front of it. ----
+      const back = slatField(p.backH, slatW, p.gap, slatW / 2);
       back.positions.forEach((s, i) => {
-        // s = distance up the (un-raked) back plane from seat level. Project it
-        // into world y/z so the slats actually tilt back as they climb — staying
+        // s = distance up the (un-raked) back plane from seat level (>=0). Project
+        // it into world y/z so the slats actually tilt back as they climb — staying
         // on the same plane line as the posts, so every slat meets both posts.
         const dy = s * Math.cos(rake);
         const dz = s * Math.sin(rake);
@@ -279,8 +282,11 @@ export const LOUNGE = [
 
       // ---- Back slats sweep up from the head (rear) edge, strongly reclined,
       // each one landing across the two raked posts (a screw to a post at each
-      // end). The posts behind the plane carry the load; the slats are the face. ----
-      const back = slatField(p.backH, slatW, p.gap);
+      // end). The posts behind the plane carry the load; the slats are the face.
+      // axisStart = slatW/2 so the field RISES from the seat's rear edge upward;
+      // otherwise slatField centres on 0 and the lower back slats sink below the
+      // seat and protrude in front of it. ----
+      const back = slatField(p.backH, slatW, p.gap, slatW / 2);
       back.positions.forEach((s, i) => {
         const dy = s * Math.cos(rake);
         const dz = s * Math.sin(rake);

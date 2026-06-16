@@ -26,7 +26,7 @@
 // grain looks the same regardless of part size.
 // ============================================================================
 
-import { SHEETS, TIMBER } from './stock.js?v=20';
+import { SHEETS, TIMBER } from './stock.js?v=21';
 
 // ----------------------------------------------------------------------------
 // Tunables

@@ -4,7 +4,7 @@
 // a set of member factories so designs are sound + consistent, not raw boxes.
 // All metric, millimetres. Members return PartSpec (see stock.js contract).
 // ============================================================================
-import { SHEETS, TIMBER, SCREWS, SCREW_KEYS } from './stock.js?v=20';
+import { SHEETS, TIMBER, SCREWS, SCREW_KEYS } from './stock.js?v=21';
 
 // ----------------------------------------------------------------------------
 // 1. ERGONOMICS — seating geometry presets (mm / degrees). Honest, comfortable.
@@ -230,4 +230,4 @@ export function difficultyOf(parts) {
   return 'Involved';
 }
 
-export { SHEETS, TIMBER, SCREWS } from './stock.js?v=20';
+export { SHEETS, TIMBER, SCREWS } from './stock.js?v=21';

@@ -27,7 +27,7 @@ import {
   ERGO, beam, leg, panel, cleat, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   reviewBuild, difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=20';
+} from '../engineering.js?v=21';
 
 // Small local readability helpers (pure lookups, not box-builders).
 const TH  = (key) => SHEETS[key].thickness;        // sheet thickness in mm
@@ -365,29 +365,38 @@ export const CLASSICS = [
       const joints = [];
 
       // ---- two A-FRAMES (each: two splayed legs + top bearer + seat bearer) --
-      // Legs cross in an X: each leg runs from a wide foot up to the opposite
-      // side under the top, so the footprint spans the full seat width. We model
-      // each leg as a beam tilted in the Z-Y plane (rot.x) so it leans inward.
-      const footHalf = seatSpan / 2 - 40;           // foot kicks out to here in z
-      const topHalf  = p.topW / 2 - legSec.w;        // legs meet under the top here
+      // Each A-frame is a true 'A': the two legs DON'T cross — each leans inward
+      // from a wide foot up to a narrower top, both staying on their own side of
+      // centre. Foot at z=sz*footHalf (ground), top at z=sz*topHalf (under top),
+      // so the leg only travels (footHalf-topHalf) in z — a sane rake whose
+      // square-cut foot barely lifts off the ground (no deep corner dig). The two
+      // top ends are tied across by the top cross-bearer; the wide feet plus the
+      // cantilevering seat bearer give the stable, tip-proof picnic stance.
+      const topHalf  = p.topW / 2 - legSec.w / 2;    // leg tops just inside the top edge
       const legRise  = topBearTopY;                  // floor to under-top
-      const legSlant = Math.round(Math.hypot(legRise, footHalf - topHalf));
-      const legTiltDeg = (Math.atan2(footHalf - topHalf, legRise) * 180) / Math.PI;
-
+      // Feet splay out beyond the top at a capped rake (~14° from vertical), wide
+      // enough for stability but not so flat the square foot digs in.
+      const legRakeDeg = 14;
+      const footHalf = topHalf + Math.tan((legRakeDeg * Math.PI) / 180) * legRise;
       [-1, 1].forEach((fx) => {                      // each A-frame at +/-frameX
         const tag = fx < 0 ? 'L' : 'R';
-        [-1, 1].forEach((sz) => {                    // two crossing legs per frame
-          // foot at z = sz*footHalf (ground), top at z = -sz*topHalf (under top):
-          // so the leg crosses the centre — classic A/X frame.
+        [-1, 1].forEach((sz) => {                    // the two legs of this 'A'
+          // foot at z=sz*footHalf (ground), top at z=sz*topHalf (under top): the
+          // leg stays on its own side and just leans inward — a real A, no cross.
           const footZ = sz * footHalf;
-          const topZ  = -sz * topHalf;
+          const topZ  = sz * topHalf;
+          const dz = topZ - footZ;                   // inward z-travel (same side)
+          const dy = legRise;                        // full rise
+          const legSlant = Math.round(Math.hypot(dy, dz));
+          // rot.x maps local +y toward +z; angle from vertical = atan2(dz, dy).
+          const legTiltDeg = (Math.atan2(dz, dy) * 180) / Math.PI;
           const cz = (footZ + topZ) / 2;
           const cy = legRise / 2;
           parts.push({
             ...beam(`LEG-${tag}${sz < 0 ? '1' : '2'}`, 'A-frame leg (splayed)', legStock,
               legSlant, 'y', { x: fx * frameX, y: cy, z: cz }, `${tag} A-frame`),
-            // tilt in the Z-Y plane (about X). Sign so the top leans toward centre.
-            rot: { x: sz * legTiltDeg, y: 0, z: 0 },
+            // tilt in the Z-Y plane (about X), derived from the real foot->top vector.
+            rot: { x: legTiltDeg, y: 0, z: 0 },
           });
         });
         // TOP cross-bearer: short beam across the top of this A-frame (along z),
@@ -480,10 +489,10 @@ export const CLASSICS = [
       ];
 
       const notes = [
-        'The A-frame is the whole structural idea: the crossed splayed legs put the feet way ' +
-          `outside the top (footprint ~${Math.round(seatSpan)}mm across), the seat bearer cantilevers ` +
-          'the benches off the same crossing, and the centre stretcher + sway braces lock the two ' +
-          'frames into a rigid space-frame. That triangulation is why you can dance on it.',
+        'The A-frame is the whole structural idea: each pair of splayed legs forms an A whose feet ' +
+          `sit well outside the top (foot stance ~${Math.round(footHalf * 2)}mm across), the seat bearer ` +
+          'cantilevers the benches out past the feet, and the centre stretcher + sway braces lock the ' +
+          'two frames into a rigid space-frame. That triangulation is why you can dance on it.',
         `Top span between A-frames ${clearSpan}mm carried by deep ${slatStock} slats over ` +
           `beamMaxSpan(${slatStock}) ${beamMaxSpan(slatStock)}mm bays — the two end overhangs keep the ` +
           'working span short; lengthen past the cap and you would add a third middle A-frame.',
