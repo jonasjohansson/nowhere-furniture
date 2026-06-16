@@ -32,7 +32,7 @@ import { SHEETS, TIMBER } from './stock.js';
 // Tunables
 // ----------------------------------------------------------------------------
 const TEX = 1024;               // base canvas resolution (square)
-const END_TEX = 512;            // end-grain canvas resolution (square)
+const END_TEX = 1024;           // end-grain canvas resolution (square)
 // The long-grain albedo spans the WHOLE board along its length (repeat = 1) so
 // the grain runs end-to-end with no repeating motif and no seam. The canvas is
 // built with full-length longitudinal striations + gentle low-frequency
@@ -66,41 +66,58 @@ const FALLBACK_COLOR = 0xc9a063;// warm pine if stockKey unknown / no color
 //
 // Hues are in turns (0..1). The amber/timber band sits ~0.06..0.11.
 // ----------------------------------------------------------------------------
+// Extra per-species knobs added for higher fidelity (all optional, default 0/1):
+//   fleckMul  : medullary-ray fleck strength on the FACE (oak ray fleck = the
+//               short shimmery dashes across quartersawn oak). 0 = none.
+//   checkMul  : frequency/strength of fine surface checks (hairline splits).
+//   fibreMul  : overall fine-fibre (multi-octave) contrast multiplier.
+//   desat     : extra desaturation pulled out of every texel (less "candy").
+//   ply       : true for plywood — draws visible laminated EDGE layers on the
+//               cut faces instead of concentric growth rings.
+//   plyLayerMM: nominal veneer-ply thickness (mm) for the edge laminations.
 const SPECIES = {
   // PINE — pale warm golden softwood. Wide soft rings, visible but gentle.
   pine: {
-    ew: { h: 0.095, s: 0.30, l: 0.70 },
+    ew: { h: 0.095, s: 0.28, l: 0.71 },
     lwDark: 0.12, lwSat: 0.05, redden: 0.020,
     ringMul: 0.9, ringBias: 1.0, striMul: 1.0, poreMul: 0.7, blotchMul: 1.0,
     roughBase: 0.60,
+    fleckMul: 0.0, checkMul: 0.6, fibreMul: 1.0, desat: 0.02,
   },
-  // OAK — mid honey-brown hardwood. Stronger, harder rings + open pores.
+  // OAK — mid honey-brown hardwood. Stronger, harder rings + open pores +
+  // the signature medullary ray fleck on quartersawn faces.
   oak: {
-    ew: { h: 0.082, s: 0.33, l: 0.60 },
+    ew: { h: 0.082, s: 0.31, l: 0.60 },
     lwDark: 0.18, lwSat: 0.06, redden: 0.018,
     ringMul: 1.15, ringBias: 1.35, striMul: 1.15, poreMul: 1.5, blotchMul: 1.0,
     roughBase: 0.62,
+    fleckMul: 1.0, checkMul: 0.8, fibreMul: 1.1, desat: 0.03,
   },
   // WALNUT — dark chocolate brown hardwood. Fine, tight, low-contrast grain.
   walnut: {
-    ew: { h: 0.060, s: 0.34, l: 0.34 },
+    ew: { h: 0.060, s: 0.32, l: 0.34 },
     lwDark: 0.10, lwSat: 0.04, redden: 0.012,
     ringMul: 1.5, ringBias: 0.8, striMul: 0.9, poreMul: 0.8, blotchMul: 1.3,
     roughBase: 0.55,
+    fleckMul: 0.0, checkMul: 0.4, fibreMul: 1.15, desat: 0.02,
   },
-  // BIRCH-PLY — very pale, near-cream. Faint, almost-straight grain (plywood).
+  // BIRCH-PLY — very pale, near-cream. Tight, even, almost-straight grain;
+  // visible laminated edge layers on the cut faces (plywood).
   'birch-ply': {
-    ew: { h: 0.105, s: 0.20, l: 0.78 },
-    lwDark: 0.05, lwSat: 0.02, redden: 0.008,
-    ringMul: 1.3, ringBias: 0.45, striMul: 0.6, poreMul: 0.3, blotchMul: 0.6,
+    ew: { h: 0.105, s: 0.18, l: 0.79 },
+    lwDark: 0.045, lwSat: 0.02, redden: 0.008,
+    ringMul: 1.6, ringBias: 0.40, striMul: 0.55, poreMul: 0.25, blotchMul: 0.5,
     roughBase: 0.58,
+    fleckMul: 0.0, checkMul: 0.2, fibreMul: 0.85, desat: 0.04,
+    ply: true, plyLayerMM: 1.4,
   },
   // IROKO / TEAK — warm outdoor golden-brown hardwood. Rich, oily, even.
   iroko: {
-    ew: { h: 0.075, s: 0.40, l: 0.50 },
+    ew: { h: 0.075, s: 0.38, l: 0.50 },
     lwDark: 0.13, lwSat: 0.06, redden: 0.022,
     ringMul: 1.1, ringBias: 1.0, striMul: 1.0, poreMul: 1.1, blotchMul: 1.1,
     roughBase: 0.58,
+    fleckMul: 0.25, checkMul: 0.5, fibreMul: 1.05, desat: 0.03,
   },
 };
 SPECIES.teak = SPECIES.iroko; // alias
@@ -256,6 +273,50 @@ function makeFbm1D(seed, octaves = 4) {
   };
 }
 
+/**
+ * 2D value noise with smooth (quintic) interpolation, hashed from `seed`.
+ * Deterministic, pure. Returns values in [0,1). Used for fine multi-octave
+ * fibre/figure detail that a 1D field can't give (it has to vary across U and V
+ * together, e.g. ray fleck and grouped earlywood/latewood mottling).
+ */
+function makeValueNoise2D(seed) {
+  const hash = (xi, yi) => {
+    let h = (xi * 374761393 + yi * 668265263 + (seed | 0) * 2654435761) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+    return (h >>> 0) / 4294967296;
+  };
+  // quintic smootherstep for C2 continuity (no grid creases under raking light)
+  const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  return function (x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const fx = fade(x - xi), fy = fade(y - yi);
+    const a = hash(xi, yi), b = hash(xi + 1, yi);
+    const c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
+    const top = a + (b - a) * fx;
+    const bot = c + (d - c) * fx;
+    return top + (bot - top) * fy;
+  };
+}
+
+/**
+ * Fractal Brownian Motion over the 2D value-noise basis. Returns ~[-1,1].
+ * `octaves` more octaves -> finer fibre. Deterministic given `seed`.
+ */
+function makeFbm2D(seed, octaves = 5) {
+  const noises = [];
+  for (let o = 0; o < octaves; o++) noises.push(makeValueNoise2D(seed + o * 1013 + 7));
+  return function (x, y) {
+    let amp = 0.5, freq = 1, sum = 0, norm = 0;
+    for (let o = 0; o < octaves; o++) {
+      sum += amp * (noises[o](x * freq, y * freq) * 2 - 1);
+      norm += amp;
+      amp *= 0.5;
+      freq *= 2.07;
+    }
+    return sum / (norm || 1);
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Colour helpers (operate on plain {r,g,b} in 0..255, sRGB-ish authoring space)
 // ----------------------------------------------------------------------------
@@ -387,6 +448,10 @@ function buildLongGrainCanvases(tintHex, seed, style) {
   const blotchMul = sp ? sp.blotchMul : 1.0;
   const spLwDark = sp ? sp.lwDark : 0.12;
   const spLwSat = sp ? sp.lwSat : 0.05;
+  const fleckMul = sp && sp.fleckMul ? sp.fleckMul : 0;
+  const checkMul = sp && sp.checkMul != null ? sp.checkMul : 0.5;
+  const fibreMul = sp && sp.fibreMul != null ? sp.fibreMul : 1.0;
+  const desat = sp && sp.desat ? sp.desat : 0;
   // Char/limewash/paint finish modes read in the texel loop.
   const charAmt = fn && fn.char ? fn.char : 0;
   const limewashAmt = fn && fn.limewash ? fn.limewash : 0;
@@ -418,6 +483,14 @@ function buildLongGrainCanvases(tintHex, seed, style) {
   const ringFbm = makeFbm1D(seed ^ 0x85ebca6b, 3);   // ring band irregularity
   const blotchFbm = makeFbm1D(seed ^ 0xc2b2ae35, 2); // large-scale blotch (V)
   const blotchFbmU = makeFbm1D(seed ^ 0x27d4eb2f, 2);
+  // 2D fields for the fine, believable detail a 1D basis can't give:
+  //   fibreFbm  — anisotropic fine fibre (stretched ALONG U so it reads as
+  //               grain lines, not a blanket of speckle).
+  //   fleckFbm  — short medullary ray fleck for oak (high U-freq dashes).
+  //   poreFbm   — clustered open-pore field (oak/iroko) instead of flat speckle.
+  const fibreFbm = makeFbm2D(seed ^ 0x165667b1, 5);
+  const fleckFbm = makeFbm2D(seed ^ 0x9e3779b1, 4);
+  const poreFbm = makeFbm2D(seed ^ 0xd3a2646c, 4);
 
   // Growth-ring band frequency: a few bands across the canvas height.
   const ringBands = (5 + Math.floor(r() * 4)) * ringFreqJitter * ringMul;
@@ -491,18 +564,48 @@ function buildLongGrainCanvases(tintHex, seed, style) {
       const stri = Math.abs(Math.sin(striY * Math.PI));
       const striMark = Math.pow(stri, 6) * 0.09 * striMul; // dark thin lines
 
-      // --- pores: fine speckle, denser in latewood (open-grain look).
-      const poreN = makeHashNoise(x, y, seed);
-      const pore = (poreN > 0.93 ? (poreN - 0.93) / 0.07 : 0) * (0.4 + 0.6 * late);
-      const poreMark = pore * 0.09 * poreMul;
+      // --- fine multi-octave fibre: subtle high-frequency grain texture
+      // STRETCHED along U (low U-freq, high V-freq) so it reads as fibre, not
+      // noise. This is what makes the surface read as real timber up close and
+      // gives the normal map something to catch raking light on.
+      const fibre = fibreFbm(u * 3.5, vv * striationFreq * 0.5);
+      const fibreMark = fibre * 0.028 * striMul * fibreMul;
+
+      // --- pores: clustered open-grain look (denser in latewood), driven by a
+      // 2D field so pores group into the rings rather than dusting uniformly.
+      const poreField = poreFbm(u * 26.0, vv * 26.0) * 0.5 + 0.5; // 0..1
+      const poreThresh = 0.80 - 0.12 * late;        // latewood opens more pores
+      const pore = poreField > poreThresh
+        ? ((poreField - poreThresh) / (1 - poreThresh)) * (0.45 + 0.55 * late)
+        : 0;
+      const poreMark = pore * 0.085 * poreMul;
+
+      // --- medullary ray fleck (oak quartersawn): short, bright-then-dark
+      // dashes lying ACROSS the grain. High U-frequency, modulated by a slow
+      // field so flecks appear in drifting bands, as on real rift/quartered oak.
+      let fleckMark = 0;
+      if (fleckMul > 0) {
+        const flGate = clamp(fleckFbm(u * 1.6, vv * 1.6) * 0.5 + 0.5, 0, 1);
+        const flStripe = Math.pow(Math.abs(Math.sin((u * 90.0 + vv * 6.0) * Math.PI)), 24);
+        fleckMark = flStripe * smoothstep(0.55, 0.85, flGate) * 0.06 * fleckMul;
+      }
+
+      // --- occasional fine checks: rare hairline splits along the grain. Driven
+      // by a thresholded 1D-ish ridge so they're sparse, thin and lengthwise.
+      let checkMark = 0;
+      if (checkMul > 0) {
+        const chField = fibreFbm(u * 0.5, vv * 9.0); // ridged
+        const ridge = 1 - Math.abs(chField);         // ~1 on zero-crossings
+        if (ridge > 0.985) checkMark = (ridge - 0.985) / 0.015 * 0.10 * checkMul;
+      }
 
       // --- large blotch: gentle lightness cloud.
       const blotch = (blotchFbm(v * 2.2) * 0.5 + blotchFbmU(u * 0.8) * 0.5) * 0.045 * blotchMul;
 
       // --- assemble HSL for this texel from the anchor.
       let hh = anchor.h + hueShift;
-      let ss = anchor.s;
-      let ll = anchor.l + lightShift + blotch;
+      let ss = anchor.s - desat;  // pull a touch of saturation out (less candy)
+      let ll = anchor.l + lightShift + blotch + fibreMark;
 
       // Latewood: darker + a touch warmer. Keep saturation gain SMALL so the
       // dark bands stay believable golden/brown, never candy red. Species set
@@ -511,8 +614,10 @@ function buildLongGrainCanvases(tintHex, seed, style) {
       ss += late * spLwSat;
       hh -= late * redden;       // a subtle warm shift, not a red jump
 
-      // Striations + pores darken locally.
-      ll -= striMark + poreMark;
+      // Striations + pores + checks darken locally; ray fleck lightens (it
+      // catches light) then the dark edge of the dash darkens slightly.
+      ll -= striMark + poreMark + checkMark;
+      ll += fleckMark - fleckMark * 0.4;
 
       // --- knots: dark cores with a swirling, locally-darker halo.
       let knotHeight = 0;
@@ -576,11 +681,13 @@ function buildLongGrainCanvases(tintHex, seed, style) {
       aData[idx + 2] = rgb.b;
       aData[idx + 3] = 255;
 
-      // Height: latewood + striations + pores sit slightly LOWER (grooves);
+      // Height: latewood + striations + pores + checks sit LOWER (grooves);
+      // fine fibre gives a gentle micro-relief so raking light reveals the grain;
       // knots pull down hard. Range roughly [-1, 0.2]. CHARRED adds cracked
       // relief so the surface reads alligatored under raking light.
       height[y * W + x] =
-        -(late * 0.5) - striMark * 3.0 - poreMark * 2.0 + knotHeight
+        -(late * 0.5) - striMark * 3.0 - poreMark * 3.5 - checkMark * 4.0
+        + fibreMark * 6.0 + knotHeight
         - (charCrack > 0 ? (1 - charCrack) * charAmt * 0.6 : 0);
     }
   }
@@ -611,6 +718,13 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx, style) {
   const fn = style ? style.finish : null;
   const anchor = sp ? { h: sp.ew.h, s: sp.ew.s, l: sp.ew.l } : timberHsl(tintHex);
   const spLwDark = sp ? sp.lwDark : 0.14; // legacy end-grain latewood drop was 0.14
+  const desat = sp && sp.desat ? sp.desat : 0;
+  const isPly = !!(sp && sp.ply);
+  // Veneer laminations per END_TEX tile for plywood edges. CROSS_PERIOD_MM is the
+  // world span of one tile across the board, so plies/tile = tileSpan / plyMM.
+  const plyLayers = isPly
+    ? clamp(CROSS_PERIOD_MM / (sp.plyLayerMM || 1.4), 3, 60)
+    : 0;
   const charAmt = fn && fn.char ? fn.char : 0;
   const limewashAmt = fn && fn.limewash ? fn.limewash : 0;
   const paintAmt = fn && fn.paint ? fn.paint : 0;
@@ -632,6 +746,8 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx, style) {
   const lightShift = (r() - 0.5) * 0.05;
   const ringPx = ringSpacingPx;                 // pixels per growth ring
   const ringFbm = makeFbm1D(seed ^ 0xa54ff53a, 3);
+  const endFibre = makeFbm2D(seed ^ 0x3b1d2e4f, 4); // fine end-grain pore texture
+  const plyFbm = makeFbm1D(seed ^ 0x7e9c3a11, 3);   // wobble of ply layer lines
   const redden = sp ? sp.redden : (0.015 + r() * 0.02);
 
   // Faint radial ray fleck (medullary rays) emanating from the pith.
@@ -639,27 +755,43 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx, style) {
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
+      const u2 = x / W, v2 = y / H;
       const dx = x - pithX, dy = y - pithY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const ang = Math.atan2(dy, dx);
 
-      // Rings: distance modulated by FBM so they wobble like real growth.
-      const ringCoord = (dist + ringFbm(ang * 2.5 + dist * 0.01) * ringPx * 0.5) / ringPx;
-      let ring = Math.sin(ringCoord * Math.PI * 2);
-      ring = Math.sign(ring) * Math.pow(Math.abs(ring), 0.6);
-      const late = smoothstep(0.2, 0.95, ring);
+      let late, ray;
+      if (isPly) {
+        // PLYWOOD EDGE: horizontal veneer laminations across the cut face.
+        // Each ply is a thin pale layer; the GLUE LINE / face between layers is
+        // a thin darker band. Wobble the boundary a touch so it isn't a ruler.
+        const layerCoord = v2 * plyLayers + plyFbm(u2 * 2.0) * 0.18;
+        const frac = layerCoord - Math.floor(layerCoord); // 0..1 within one ply
+        // dark glue line near the layer boundary (frac near 0/1)
+        const edge = Math.min(frac, 1 - frac);            // 0 at boundary
+        // glue line acts as "latewood": 1 on the line, 0 across the veneer.
+        late = (1 - smoothstep(0.0, 0.10, edge));
+        // alternate layers very slightly lighter/darker (alternating veneers)
+        ray = (Math.floor(layerCoord) & 1) ? 0.012 : -0.012;
+      } else {
+        // Rings: distance modulated by FBM so they wobble like real growth.
+        const ringCoord = (dist + ringFbm(ang * 2.5 + dist * 0.01) * ringPx * 0.5) / ringPx;
+        let ring = Math.sin(ringCoord * Math.PI * 2);
+        ring = Math.sign(ring) * Math.pow(Math.abs(ring), 0.6);
+        late = smoothstep(0.2, 0.95, ring);
+        // Radial rays: thin lighter spokes.
+        ray = Math.pow(Math.abs(Math.sin(ang * rayCount * 0.5)), 14) * 0.05;
+      }
 
-      // Radial rays: thin lighter spokes.
-      const ray = Math.pow(Math.abs(Math.sin(ang * rayCount * 0.5)), 14) * 0.05;
-
-      // Fine speckle.
-      const spk = makeHashNoise(x, y, seed ^ 0x1234) > 0.95 ? 0.06 : 0;
+      // Fine end-grain pore texture (multi-octave, denser in latewood/glue).
+      const ef = endFibre(u2 * 60.0, v2 * 60.0) * 0.5 + 0.5;
+      const spk = ef > 0.86 ? (ef - 0.86) / 0.14 * 0.06 * (0.5 + 0.5 * late) : 0;
 
       let hh = anchor.h + hueShift;
-      let ss = anchor.s;
+      let ss = anchor.s - desat;
       let ll = anchor.l + lightShift + ray;
       ll -= late * spLwDark + spk;
-      ss += late * 0.05;
+      ss += late * (isPly ? 0.02 : 0.05);
       hh -= late * redden;
 
       // --- FINISH POST-PROCESS on the cut end (mirrors the long-grain logic so
@@ -672,7 +804,6 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx, style) {
           ss *= 1 - late * limewashAmt * 0.5;
         }
         if (charAmt > 0) {
-          const u2 = x / W, v2 = y / H;
           const crack = Math.pow(clamp(charFbm(u2 * 6.0 + v2 * 9.0) * 0.5 + 0.5, 0, 1), 3);
           charCrack = crack;
           ll = ll * (1 - charAmt * 0.85) + crack * 0.06;
@@ -712,7 +843,12 @@ function buildEndGrainCanvases(tintHex, seed, ringSpacingPx, style) {
 // Height -> normal / roughness derivation (shared)
 // ----------------------------------------------------------------------------
 
-/** Sobel-ish height -> tangent-space normal map canvas. */
+/**
+ * Height -> tangent-space normal map canvas, via a full 3x3 Sobel kernel.
+ * The Sobel kernel averages over the diagonal neighbours too, so the gradient is
+ * smoother and less aliased than a 2-tap central difference — the grain reads as
+ * clean directional relief under raking light rather than stair-stepped noise.
+ */
 function heightToNormal(height, W, H, strength) {
   const canvas = makeCanvas(W, H);
   const ctx = canvas.getContext('2d');
@@ -721,11 +857,15 @@ function heightToNormal(height, W, H, strength) {
   const at = (x, y) => height[((y + H) % H) * W + ((x + W) % W)];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const hl = at(x - 1, y), hr = at(x + 1, y);
-      const hu = at(x, y - 1), hd = at(x, y + 1);
-      // gradient -> normal. Scale by strength.
-      let nx = (hl - hr) * strength * 4;
-      let ny = (hu - hd) * strength * 4;
+      const tl = at(x - 1, y - 1), tc = at(x, y - 1), tr = at(x + 1, y - 1);
+      const ml = at(x - 1, y), mr = at(x + 1, y);
+      const bl = at(x - 1, y + 1), bc = at(x, y + 1), br = at(x + 1, y + 1);
+      // Sobel gradients (horizontal gx, vertical gy).
+      const gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+      const gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+      // gradient -> normal. Scale by strength (gx/gy already ~4x a central diff).
+      let nx = -gx * strength * 1.6;
+      let ny = -gy * strength * 1.6;
       let nz = 1.0;
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       nx /= len; ny /= len; nz /= len;
@@ -753,9 +893,13 @@ function heightToRoughness(height, W, H, base, floor, ceil) {
   const img = ctx.createImageData(W, H);
   const d = img.data;
   for (let i = 0; i < W * H; i++) {
-    // height roughly [-2, 0.2]; lower -> rougher. Map within the finish window.
+    // height roughly [-2, 0.2]; lower (grooves: latewood/pores/checks) -> rougher,
+    // smoother earlywood -> glossier. A slightly nonlinear push on the groove term
+    // widens the matte/satin separation so oiled vs raw reads clearly different,
+    // and so pores/checks scatter light visibly more than the planed field.
     const hgt = clamp(height[i], -1.2, 0.2);
-    const rough = clamp(base + (-hgt) * 0.12, lo, hi);
+    const groove = -hgt;                       // 0 (high) .. ~1.2 (deep groove)
+    const rough = clamp(base + groove * 0.10 + groove * groove * 0.06, lo, hi);
     const g = Math.round(rough * 255);
     const idx = i * 4;
     d[idx] = g; d[idx + 1] = g; d[idx + 2] = g; d[idx + 3] = 255;
@@ -767,13 +911,6 @@ function heightToRoughness(height, W, H, base, floor, ceil) {
 // ----------------------------------------------------------------------------
 // Tiny utilities
 // ----------------------------------------------------------------------------
-
-/** Hash-based white-ish noise in [0,1) from integer pixel coords. Deterministic. */
-function makeHashNoise(x, y, seed) {
-  let h = (x * 374761393 + y * 668265263 + seed * 2654435761) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
-  return (h >>> 0) / 4294967296;
-}
 
 /** Create a canvas in browser or a stub in non-DOM (Node) so module parses. */
 function makeCanvas(w, h) {

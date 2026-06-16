@@ -25,6 +25,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SHEETS, TIMBER, MM } from './stock.js';
 import { disposeWoodCache } from './wood.js';
 import { materialMaterial, defaultMaterialForStock } from './materials.js';
@@ -130,6 +131,8 @@ export class Builder {
     // ---- scene -----------------------------------------------------------
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xe9e2d4); // warm sand (matches the UI)
+    // Soft desert haze — fades the far ground into the sand background for depth.
+    this.scene.fog = new THREE.Fog(0xe9e2d4, 5, 20);
 
     // ---- camera ----------------------------------------------------------
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -142,25 +145,34 @@ export class Builder {
     // warm background; no HDR file to download.
     this._pmrem = new THREE.PMREMGenerator(this.renderer);
     this._pmrem.compileEquirectangularShader();
-    // Load a desert-sky HDRI for image-based lighting + a soft sky backdrop.
-    // Until it arrives the warm-sand background (set above) stands in; on failure
-    // it simply stays sand.
+    // SYNCHRONOUS baseline IBL. Parts are built during boot, BEFORE the HDRI
+    // finishes loading async; without a valid scene.environment NOW they'd bake
+    // envMap=null and the scene would visibly pop from dim to lit ~1s in (the
+    // "it gets overwritten" the user sees — it's the HDRI arriving, not leaving).
+    // Bake a warm RoomEnvironment up front; the HDRI then SWAPS it (warm->warm).
+    const _room = new RoomEnvironment();
+    this._envRT = this._pmrem.fromScene(_room, 0.04);
+    this.scene.environment = this._envRT.texture;
+    this.scene.environmentIntensity = 1.0;
+    _room.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
+    });
+    // Desert-sky HDRI for the real image-based lighting. On arrival it replaces
+    // the baseline and re-skins the parts so they bake the HDRI as an explicit
+    // envMap at full strength (not the muted scene fallback). Background stays
+    // sand. On failure the warm baseline + sand remain.
     new RGBELoader().load('assets/hdri/desert.hdr', (hdr) => {
       if (this._disposed) { hdr.dispose(); return; }
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       const rt = this._pmrem.fromEquirectangular(hdr);
-      this.scene.environment = rt.texture;        // reflections + IBL on the wood
-      // The bright clear-sky HDRI must be kept SUBTLE — at full strength it over-
-      // lights the ground + wood to a cool white wash (the old RoomEnvironment was
-      // baked dim at 0.04). Low intensity = soft realistic reflections while the
-      // warm directional + hemisphere rig stays the main light.
-      this.scene.environmentIntensity = 1.0;
-      // NB: we DON'T set scene.background to the HDRI — the warm sand background
-      // (set above) stays, so there's no jarring sky pop-in and the viewport reads
-      // cohesively with the minimal desert UI. The HDRI only lights the wood.
-      hdr.dispose();
+      if (this._envRT) this._envRT.dispose();
       this._envRT = rt;
-    }, undefined, () => { /* keep the sand background on load failure */ });
+      this.scene.environment = rt.texture;
+      this.scene.environmentIntensity = 1.0;
+      hdr.dispose();
+      for (const item of this.items.values()) this._applyMaterial(item);
+    }, undefined, () => { /* keep the baseline env + sand background on failure */ });
 
     // ---- lighting --------------------------------------------------------
     // Hemisphere for soft warm ambient (sky warm-white, ground a muted sand).
