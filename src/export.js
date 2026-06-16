@@ -31,7 +31,7 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=15';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=16';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities
@@ -931,9 +931,20 @@ export function buildExplodedSVG(parts, opts = {}) {
   body.push(`<text x="${PAGE_W - MARGIN}" y="${y + 6}" font-size="13" fill="#666" text-anchor="end">${kinds} distinct pieces · ${totalParts} parts total · mm</text>`);
   y += 34;
   body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#1a1a1a" stroke-width="1.5"/>`);
-  y += 24;
+  y += 22;
+
+  // --- isometric exploded view (one unit) -----------------------------------
+  body.push(`<text x="${MARGIN}" y="${y}" font-size="15" font-weight="bold" fill="#2b5d8a">Exploded view${parts.some((p) => /^U\d+-/.test(p.ref || '')) ? ' (one unit)' : ''}</text>`);
+  y += 16;
+  const iso = isoExplodedBlock(parts, MARGIN, y, PAGE_W - MARGIN * 2);
+  body.push(...iso.body);
+  y += iso.height + 44;
 
   // --- pieces grid ----------------------------------------------------------
+  body.push(`<line x1="${MARGIN}" y1="${y}" x2="${PAGE_W - MARGIN}" y2="${y}" stroke="#d8d8d8" stroke-width="1"/>`);
+  y += 24;
+  body.push(`<text x="${MARGIN}" y="${y}" font-size="15" font-weight="bold" fill="#2b5d8a">Pieces</text>`);
+  y += 26;
   let x = MARGIN, rowH = 0;
   for (const g of pieces) {
     const rw = g.face[0] * scale, rh = g.face[1] * scale;
@@ -983,6 +994,116 @@ export function buildExplodedSVG(parts, opts = {}) {
 
   y += MARGIN;
   return svgDoc(PAGE_W, y, body.join('\n'));
+}
+
+// ----------------------------------------------------------------------------
+// Isometric exploded-view helpers
+// ----------------------------------------------------------------------------
+
+/** If the parts carry unit refs (U1-, U2- …), keep only the first unit so the
+ *  exploded diagram shows ONE assembly, not the whole repeated row. */
+function firstUnitParts(parts) {
+  const hasUnits = parts.some((p) => /^U\d+-/.test(p.ref || ''));
+  return hasUnits ? parts.filter((p) => /^U1-/.test(p.ref || '')) : parts;
+}
+
+/** Shade a hex-int colour by a factor (0..1) -> "#rrggbb". */
+function shadeHex(colorInt, f) {
+  const c = (colorInt == null) ? 0xcfe2f3 : colorInt;
+  const r = Math.round(((c >> 16) & 255) * f);
+  const g = Math.round(((c >> 8) & 255) * f);
+  const b = Math.round((c & 255) * f);
+  const h = (v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+/**
+ * Build an isometric EXPLODED assembly diagram of one unit: each part is pushed
+ * radially out from the assembly centroid (so tops lift, legs drop & spread,
+ * rails sit mid) and drawn as a shaded iso box in its own colour, with a dashed
+ * guide line back toward where it seats. Returns { body, height } laid out from
+ * (ox, oy), centred within `maxW` px.
+ *
+ * @param {PartSpec[]} parts
+ * @param {number} ox  left px
+ * @param {number} oy  top px
+ * @param {number} maxW available width px
+ * @returns {{body:string[], height:number}}
+ */
+function isoExplodedBlock(parts, ox, oy, maxW) {
+  const sel = firstUnitParts(parts);
+  if (!sel.length) return { body: [], height: 0 };
+
+  // Axis-aligned boxes (handle 90° Y-rotation by swapping x/z extents).
+  const boxes = sel.map((p) => {
+    const s = p.size || { w: 0, h: 0, d: 0 };
+    const pos = p.pos || { x: 0, y: 0, z: 0 };
+    let ex = s.w, ey = s.h, ez = s.d;
+    const ry = ((p.rot && p.rot.y) || 0) % 180;
+    if (ry === 90 || ry === -90) { const t = ex; ex = ez; ez = t; }
+    return { name: p.name || '', color: p.color, cx: pos.x, cy: pos.y, cz: pos.z, ex, ey, ez };
+  });
+
+  // Centroid, then explode each part outward from it.
+  const cen = boxes.reduce((a, b) => ({ x: a.x + b.cx, y: a.y + b.cy, z: a.z + b.cz }), { x: 0, y: 0, z: 0 });
+  cen.x /= boxes.length; cen.y /= boxes.length; cen.z /= boxes.length;
+  const EX = 1.15; // explosion amount (1 = double the offset from centre)
+  for (const b of boxes) {
+    b.dx = cen.x + (b.cx - cen.x) * (1 + EX);
+    b.dy = cen.y + (b.cy - cen.y) * (1 + EX);
+    b.dz = cen.z + (b.cz - cen.z) * (1 + EX);
+  }
+
+  // Isometric projection (y up). Returns mm-space screen coords (pre-scale).
+  const C = 0.866, S = 0.5;
+  const pr = (x, y, z) => ({ X: (x - z) * C, Y: (x + z) * S - y });
+
+  // Bounds over every projected corner so we can scale to fit.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const b of boxes) {
+    const xs = [b.dx - b.ex / 2, b.dx + b.ex / 2];
+    const ys = [b.dy - b.ey / 2, b.dy + b.ey / 2];
+    const zs = [b.dz - b.ez / 2, b.dz + b.ez / 2];
+    for (const X of xs) for (const Y of ys) for (const Z of zs) {
+      const q = pr(X, Y, Z);
+      minX = Math.min(minX, q.X); maxX = Math.max(maxX, q.X);
+      minY = Math.min(minY, q.Y); maxY = Math.max(maxY, q.Y);
+    }
+  }
+  const wmm = Math.max(1, maxX - minX), hmm = Math.max(1, maxY - minY);
+  const sc = Math.min(maxW / wmm, 380 / hmm);   // fit width, cap height ~380px
+  const contentW = wmm * sc, contentH = hmm * sc;
+  const padX = ox + (maxW - contentW) / 2;       // centre horizontally
+  // Map a mm-space screen point to final px.
+  const toPx = (q) => ({ x: padX + (q.X - minX) * sc, y: oy + (q.Y - minY) * sc });
+
+  const body = [];
+
+  // Dashed guide lines from seated centre -> exploded centre (drawn behind).
+  for (const b of boxes) {
+    const a = toPx(pr(b.cx, b.cy, b.cz));
+    const d = toPx(pr(b.dx, b.dy, b.dz));
+    body.push(`<line x1="${round(a.x, 1)}" y1="${round(a.y, 1)}" x2="${round(d.x, 1)}" y2="${round(d.y, 1)}" stroke="#bbb" stroke-width="1" stroke-dasharray="4 4"/>`);
+  }
+
+  // Painter's order: far (small x+y+z) first.
+  boxes.sort((a, b) => (a.dx + a.dy + a.dz) - (b.dx + b.dy + b.dz));
+
+  const poly = (pts, fill) =>
+    `<polygon points="${pts.map((p) => `${round(p.x, 1)},${round(p.y, 1)}`).join(' ')}" fill="${fill}" stroke="#1a1a1a" stroke-width="1" stroke-linejoin="round"/>`;
+
+  for (const b of boxes) {
+    const x0 = b.dx - b.ex / 2, x1 = b.dx + b.ex / 2;
+    const y0 = b.dy - b.ey / 2, y1 = b.dy + b.ey / 2;
+    const z0 = b.dz - b.ez / 2, z1 = b.dz + b.ez / 2;
+    const P = (x, y, z) => toPx(pr(x, y, z));
+    // three visible faces: top (y1), right (x1), front (z1)
+    body.push(poly([P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)], shadeHex(b.color, 1.0)));   // top
+    body.push(poly([P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1)], shadeHex(b.color, 0.80)));  // right
+    body.push(poly([P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)], shadeHex(b.color, 0.62)));  // front
+  }
+
+  return { body, height: contentH };
 }
 
 /** Greedy word-wrap into lines of at most `maxChars` characters. */

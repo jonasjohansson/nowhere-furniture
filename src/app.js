@@ -1,16 +1,16 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=15';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=15';
-import { computeBOM, bomSummaryLine } from './bom.js?v=15';
-import { SHEETS, TIMBER } from './stock.js?v=15';
-import { MATERIALS } from './materials.js?v=15';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=15';
+import { Builder } from './builder.js?v=16';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=16';
+import { computeBOM, bomSummaryLine } from './bom.js?v=16';
+import { SHEETS, TIMBER } from './stock.js?v=16';
+import { MATERIALS } from './materials.js?v=16';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=16';
 import {
   bomToCSV, partsToCSV, bomToHTML, buildCutSheetSVG, buildElevationsSVG, buildExplodedSVG,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=15';
+} from './export.js?v=16';
 
 const $ = (id) => document.getElementById(id);
 
