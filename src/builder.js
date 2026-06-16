@@ -1023,6 +1023,18 @@ export class Builder {
     this._disposeMaterial(item.mesh.material);
     item.mesh.material = mat;
 
+    // Per-part hue accent: when the spec sets an explicit colour (e.g. the
+    // interlocking tabs), nudge the material's hue toward it — warmer/deeper —
+    // so the part reads distinct against the rest, whatever the active material.
+    if (item.spec.color != null) {
+      const tint = new THREE.Color(item.spec.color);
+      const arr = Array.isArray(mat) ? mat : [mat];
+      for (const m of arr) {
+        m.color.lerp(tint, 0.5); // blend halfway toward the accent hue
+        m.needsUpdate = true;
+      }
+    }
+
     // Re-apply selection highlight if this is the selected part.
     this._setHighlight(item, this.selectedId === item.id);
   }

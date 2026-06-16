@@ -70,14 +70,18 @@ export const INTERLOCK = [
       const aprY    = (seatTop - topThk) - aprH / 2;
       const railLen = p.depth;
 
+      // The tabs/legs carry a slightly different (warmer, deeper amber) hue so the
+      // interlocking tabs read as distinct against the top + rails.
+      const TAB_HUE = 0xc6873c;
+
       // One unit, built in a LOCAL frame centred on the origin.
       function baseUnit() {
         const ps = [];
         ps.push(panel('TOP', 'Top board', topStock, p.len, p.depth, 'xz',
           { x: 0, y: topY, z: 0 }, 'Top'));
         for (const sz of [-1, 1]) legXs.forEach((lx, i) => {
-          ps.push(panel(`LEG-${sz < 0 ? 'B' : 'F'}${i + 1}`, 'Board leg', legStock,
-            legW, legH, 'xy', { x: lx, y: legY, z: sz * legZ }, 'Legs'));
+          ps.push({ ...panel(`LEG-${sz < 0 ? 'B' : 'F'}${i + 1}`, 'Board leg', legStock,
+            legW, legH, 'xy', { x: lx, y: legY, z: sz * legZ }, 'Legs'), color: TAB_HUE });
         });
         legXs.forEach((lx, i) => {
           ps.push(panel(`RAIL-${i + 1}`, 'Cross rail', aprStock, railLen, aprH, 'zy',
