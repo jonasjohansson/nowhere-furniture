@@ -55,8 +55,8 @@
 
 import {
   ERGO,
-  profilePanel, trapezoid, rect, fin,
-  crossLapSlot, slotJoint,
+  profilePanel, trapezoid, rect, wedge, fin,
+  crossLapSlot, slotJoint, wedgeTenon,
   SHEETS,
 } from '../engineering.js?v=22';
 import { slotWidth } from '../stock.js?v=22';
@@ -361,6 +361,206 @@ export const CNC_SLOT = [
         'All four parts nest from a single 18mm ply sheet with the two fins identical, so it cuts and stores flat.',
         'Press-fit loungers can loosen with humidity swings; a dab of PVA in the slots makes it permanent if you do not need to flat-pack it again.',
       ];
+
+      return { parts, joints, steps, notes };
+    },
+  },
+
+  // --------------------------------------------------------------------------
+  // SLAB TRESTLE BENCH — Nowhere CNC Crew, 2026.
+  // Two identical angled slab ENDS stand vertical at each end of the bench; a
+  // flat SEAT spans the length and drops THROUGH a housing in each end. Lower
+  // down, a STRETCHER ties the two feet: its tabs project through a slot in each
+  // end and a flat WEDGE is driven through each projecting tab — a demountable
+  // tusk (wedged through-tenon). Two ends + seat + stretcher + 2 wedges = five
+  // sheet shapes, no screws, knock-down.
+  // --------------------------------------------------------------------------
+  {
+    id: 'cnc-slot-bench',
+    name: 'Slab Trestle Bench',
+    designer: 'Nowhere CNC Crew',
+    year: 2026,
+    blurb: 'A screwless CNC bench: two identical slab ends carry a flat seat ' +
+      'through a housing in each end, and a stretcher is locked low down by ' +
+      'driven tusk wedges. Knock-down, flat-pack, cut from one ply sheet.',
+    difficulty: 'Medium',
+    buildTime: '45–60 min',
+    params: [
+      { key: 'len',    label: 'Bench length',                       min: 900, max: 2000, step: 10, default: 1500, unit: 'mm' },
+      { key: 'seatH',  label: 'Seat height',                        min: 380, max: 500,  step: 5,  default: ERGO.bench.seatH, unit: 'mm' },
+      { key: 'seatD',  label: 'Seat depth',                         min: 280, max: 440,  step: 10, default: ERGO.bench.seatD, unit: 'mm' },
+      { key: 'footW',  label: 'Foot spread (slab base)',            min: 280, max: 480,  step: 10, default: 360, unit: 'mm' },
+      { key: 'spine',  label: 'Mid spine fin (0 off,1 on)',         min: 0, max: 1, step: 1, default: 0, unit: '' },
+      { key: 'fit',    label: 'Fit class (0 snug,1 std,2 outdoor)', min: 0, max: 2, step: 1, default: 1, unit: '' },
+    ],
+
+    build(p) {
+      const FIT = ['snug', 'standard', 'outdoor'][p.fit] ?? 'standard';
+      const stock = 'ply18';
+      const thk = PLY(stock);                       // 18mm — the mating thickness
+
+      const seatTop = p.seatH;
+      const seatLen = p.len;
+      const seatDepth = p.seatD;
+
+      // --- Slab END geometry ---------------------------------------------
+      // Each end is a vertical trapezoidal slab: a wide foot tapering up to a
+      // narrower top edge that the seat sits across. Authored in the part's
+      // LOCAL plane where local-x = bench depth (world z) and local-y = height.
+      // trapezoid() is centred on x=0, anchored at y=0 (foot on the ground), so
+      // the slab already stands on the ground. Same outline for both ends →
+      // identical bbox (the test asserts this).
+      const footW = p.footW;
+      const endTopW = Math.min(seatDepth, footW * 0.85);  // top edge ≤ foot, ≤ seat depth
+      const endH = seatTop - thk;                          // top edge at the seat underside
+      const endOutline = () => trapezoid(footW, endTopW, endH);
+
+      // Through-housing for the seat: the seat passes through the slab top edge.
+      // Notch centred on the slab centreline (local x=0), at the top edge, cut
+      // `thk` deep (the seat thickness) so seat and slab mesh flush. (Through-
+      // housing, like the lounge — not a 50% half-lap.)
+      const seatHousing = crossLapSlot(0, endH, thk, thk, FIT, 0);
+
+      // Tusk slot for the stretcher: lower down, on the centreline, a THROUGH
+      // slot the stretcher's tab passes through (cut = stretcher thickness).
+      const stretcherY = Math.max(thk * 4, endH * 0.28);   // low rail, clear of the ground
+      const tuskSlot = crossLapSlot(0, stretcherY, thk, thk, FIT, 90);
+
+      const endSlots = [seatHousing, tuskSlot];
+
+      // --- Seat panel ----------------------------------------------------
+      // Flat rect in plane 'xz' (lies flat, thickness up). Local-x = bench
+      // length, local-y = seat depth. Spans the full length; carries a mating
+      // through-mortise over each end so it seats into the slab housings.
+      const seatProfile = rect(seatLen, seatDepth);
+      // Ends stand at x = ±len/2; their slabs run in z, so the seat meets each
+      // end near its x-ends. Mortise centred in depth, one inset from each end.
+      const mortiseInset = thk;
+      const seatSlots = [
+        crossLapSlot(mortiseInset, seatDepth / 2, thk, thk, FIT, 90),
+        crossLapSlot(seatLen - mortiseInset, seatDepth / 2, thk, thk, FIT, 90),
+      ];
+      // With the mid spine on, the seat also houses onto a central support: add a
+      // third mortise at the seat's mid-length so the declared 3rd engagement is
+      // backed by a real mating feature (same crossLapSlot pattern as the ends).
+      if (p.spine) {
+        seatSlots.push(crossLapSlot(seatLen / 2, seatDepth / 2, thk, thk, FIT, 90));
+      }
+
+      // --- Stretcher (rail) with projecting tusk tabs --------------------
+      // An upright board running the bench length, plane 'xy' (faces ±z). Local-x
+      // = length (world x), local-y = height. It is long enough to PROJECT a tab
+      // beyond each end slab; each tab carries a slot the flat wedge drives
+      // through, drawing the ends tight. Rail height is a fixed structural depth.
+      const railH = 90;                              // structural depth of the rail
+      const tabLen = 70;                             // tab projecting beyond each slab
+      const wedgeW = 26;                             // wedge slot/part width
+      // The two end slabs sit at x = ±len/2; the rail body runs between them and
+      // a tab pokes through each. Body span = len (slab faces), + tabLen each end.
+      const railLen = seatLen + 2 * tabLen;
+      const stretcherProfile = rect(railLen, railH);
+      // A vertical mortise where the wedge passes through each tab, just OUTSIDE
+      // each slab face (tab mid-point). Local-x positions of the slab faces:
+      const slabFaceL = tabLen;                      // inner face of the left tab region
+      const slabFaceR = railLen - tabLen;
+      const wedgeMortL = slabFaceL - tabLen / 2;     // wedge sits mid-tab, outside the slab
+      const wedgeMortR = slabFaceR + tabLen / 2;
+      const stretcherSlots = [
+        crossLapSlot(wedgeMortL, railH / 2, thk, wedgeW, FIT, 90),
+        crossLapSlot(wedgeMortR, railH / 2, thk, wedgeW, FIT, 90),
+      ];
+
+      // --- Wedges --------------------------------------------------------
+      // Two flat tapered wedges (their own profile parts), driven down through
+      // the tab mortises to lock the stretcher. A simple wedge() outline: wide
+      // base tapering to a narrow tip. Plane 'xy' (a thin flat key).
+      const wedgeBaseW = wedgeW;
+      const wedgeTipInset = wedgeBaseW * 0.3;        // taper per side
+      const wedgeH = railH * 0.9;
+      const wedgeOutline = () => wedge(wedgeBaseW, wedgeH, wedgeTipInset);
+
+      const parts = [];
+
+      // Two identical end slabs, plane 'zy' (flat faces ±x, body runs in z & y).
+      // Foot at local y=0 → stands on the ground. At x = ±len/2.
+      const endL = profilePanel('END-L', 'Slab end', stock,
+        { plane: 'zy', ...endOutline(), slots: endSlots },
+        { x: -seatLen / 2, y: 0, z: 0 }, 'Ends');
+      const endR = profilePanel('END-R', 'Slab end', stock,
+        { plane: 'zy', ...endOutline(), slots: endSlots },
+        { x: seatLen / 2, y: 0, z: 0 }, 'Ends');
+
+      // Seat, flat at the seat height (top at seatTop).
+      const seat = profilePanel('SEAT', 'Seat', stock,
+        { plane: 'xz', ...seatProfile, slots: seatSlots },
+        { x: 0, y: seatTop - thk / 2, z: 0 }, 'Seat');
+
+      // Stretcher, upright low rail tying the two ends; centred on x=0.
+      const stretcher = profilePanel('STRETCHER', 'Stretcher', stock,
+        { plane: 'xy', ...stretcherProfile, slots: stretcherSlots },
+        { x: 0, y: stretcherY, z: 0 }, 'Stretcher');
+
+      parts.push(endL, endR, seat, stretcher);
+
+      // Two driven wedges, one per projecting tab, plane 'xy'. Placed outside each
+      // slab face, at the rail height.
+      const wedgeL = profilePanel('WEDGE-1', 'Wedge', stock,
+        { plane: 'xy', ...wedgeOutline(), slots: [] },
+        { x: -seatLen / 2 - tabLen / 2, y: stretcherY, z: 0 }, 'Wedges');
+      const wedgeR = profilePanel('WEDGE-2', 'Wedge', stock,
+        { plane: 'xy', ...wedgeOutline(), slots: [] },
+        { x: seatLen / 2 + tabLen / 2, y: stretcherY, z: 0 }, 'Wedges');
+      parts.push(wedgeL, wedgeR);
+
+      // Optional central spine fin for long spans: a FLOOR-STANDING central slab
+      // (a third trestle leg at mid-span) anchored at y=0, reaching the full end
+      // height, that the seat houses onto at the bench mid-point.
+      let spine = null;
+      if (p.spine) {
+        const spineH = endH;
+        const spineOutline = () => trapezoid(endTopW, endTopW * 0.7, spineH);
+        const spineSeatHousing = crossLapSlot(0, spineH, thk, thk, FIT, 0);
+        spine = profilePanel('SPINE', 'Spine fin', stock,
+          { plane: 'zy', ...spineOutline(), slots: [spineSeatHousing] },
+          { x: 0, y: 0, z: 0 }, 'Spine');
+        parts.push(spine);
+      }
+
+      const joints = [
+        slotJoint(2, 'seat board passes through a through-housing in each slab end (2 engagements)'),
+        wedgeTenon(thk, tabLen, 2, 'stretcher tabs project through each slab end and are locked by a driven tusk wedge (2 wedges)'),
+      ];
+      if (p.spine) {
+        joints[0] = slotJoint(3, 'seat board passes through a through-housing in each slab end and the mid spine (3 engagements)');
+      }
+
+      // --- Span guardrail ------------------------------------------------
+      // An 18mm seat unsupported over a long clear span sags. With no spine the
+      // clear span is the full length between the ends; warn past ~750mm.
+      const clearSpan = Math.max(0, seatLen - 2 * footW); // rough clear span between feet (clamped)
+      const SPAN_LIMIT = 750;
+      const overspan = !p.spine && clearSpan > SPAN_LIMIT;
+
+      const steps = [
+        `CNC-cut from one ${stock} sheet: 2 identical slab ends (foot ${Math.round(footW)}mm, ${Math.round(endH)}mm tall) + 1 seat ${seatLen}×${seatDepth}mm + 1 stretcher ${Math.round(railLen)}×${railH}mm + 2 wedges${p.spine ? ' + 1 mid spine fin' : ''}.`,
+        `All slots are cut for a ${FIT} fit (${seatHousing.w.toFixed(2)}mm wide for ${thk}mm ply). Clear any dogbone reliefs before assembly.`,
+        'Stand the two slab ends upright, housing side up, the bench length apart.',
+        `Drop the seat into the housing in each end (seat top at ${Math.round(seatTop)}mm) so it meshes flush with both slabs.`,
+        'Pass the stretcher through the low slot in each end so a tab projects beyond each slab face.',
+        'Drive a wedge down through each projecting tab to draw the ends tight against the seat. Tap home with a mallet; the wedges are demountable for flat-pack.',
+        'Check the bench sits flat and rocks on no end; ease all edges. For outdoor use pick the outdoor fit and oil the ply.',
+      ];
+      const notes = [
+        'Knock-down: the seat housings locate the slabs and the two tusk wedges lock the stretcher, squaring the frame. No glue, no screws — drive the wedges out to flat-pack.',
+        'All parts nest from a single 18mm ply sheet with the two ends and two wedges identical, so it cuts and stores flat.',
+        'Press-fit benches can loosen with humidity swings; the tusk wedges can simply be re-driven to take up any slack.',
+      ];
+      if (overspan) {
+        notes.push(
+          `The clear seat span (~${Math.round(clearSpan)}mm) exceeds ~${SPAN_LIMIT}mm: an unsupported 18mm seat will sag. ` +
+          'Turn on the mid spine fin (a central bearer/support under the seat) or add an intermediate trestle for this length.'
+        );
+      }
 
       return { parts, joints, steps, notes };
     },

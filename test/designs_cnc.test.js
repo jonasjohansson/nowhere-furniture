@@ -69,3 +69,28 @@ test('wedge lounge chair: invariants + two mirrored side fins + recline', () => 
   assert.ok(fin.profile.pts.some(pt => Math.abs(pt.y - p.seatH) < 60),
     'a seat-front anchor sits near seatH');
 });
+
+test('slab trestle bench: invariants + two slab ends + wedge tenon + span note', () => {
+  const d = byId('cnc-slot-bench');
+  assertDesignInvariants(d);
+  const p = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(p);
+  // two angled slab END panels (same outline)
+  const ends = out.parts.filter(x => x.group === 'Ends' || /end|leg|slab/i.test(x.ref));
+  assert.ok(ends.length === 2, 'two slab ends');
+  // a stretcher locked by a wedge tenon (screwless, demountable)
+  assert.ok(out.joints.some(j => j.type === 'wedge-tenon'), 'has a wedge-tenon joint');
+  assert.ok(out.parts.some(x => /wedge/i.test(x.ref) || /wedge/i.test(x.name || '')),
+    'wedge is a cut part');
+  // long spans must warn about a spine/mid-bearer in the notes
+  const lenMax = d.params.find(x => x.key === 'len').max;
+  const longSpan = d.build({ ...p, len: lenMax, spine: 0 });
+  assert.ok(longSpan.notes.some(n => /spine|bearer|support|span/i.test(n)),
+    'long bench notes mention a spine/bearer for the unsupported span');
+  // spine on: the seat must carry a THIRD mortise to back the 3rd engagement.
+  const withSpine = d.build({ ...p, spine: 1 });
+  const seatPart = withSpine.parts.find(x => /seat/i.test(x.ref));
+  assert.equal(seatPart.slots.length, 3, 'spine on → seat has 3 mortises');
+  assert.ok(withSpine.joints.some(j => j.type === 'slot-crosslap' && j.count === 3),
+    'spine on → seat slot joint declares 3 engagements');
+});
