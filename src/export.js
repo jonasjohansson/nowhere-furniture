@@ -31,7 +31,8 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf } from './stock.js?v=22';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf, reliefRadius } from './stock.js?v=22';
+import { sampleArc } from './engineering.js?v=22';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities
@@ -271,6 +272,27 @@ export function bomToHTML(bom, meta) {
       </tr>`;
   }).join('');
 
+  // --- slot-together joinery (screwless designs) ----------------------------
+  // Slot/wedge designs buy no screws, so surface the joinery the BOM exposes so
+  // the build sheet still positively reports how the parts lock together.
+  const joinery = bom.joinery || {};
+  const slotEng = joinery.slotEngagements || 0;
+  const wedgeCt = joinery.wedges || 0;
+  const joineryBlock = (slotEng || wedgeCt) ? `
+  <section>
+    <h2>Slot-together joinery</h2>
+    <table class="grid">
+      <thead><tr><th>Joint</th><th class="num">Count</th></tr></thead>
+      <tbody>
+        <tr><td>Cross-lap / housing slot engagements</td><td class="num">${esc(slotEng)}</td></tr>
+        <tr><td>Driven tusk wedges</td><td class="num">${esc(wedgeCt)}</td></tr>
+      </tbody>
+    </table>
+    <p style="color:var(--muted);font-size:11px;margin-top:8px;">
+      Screwless press-fit joinery — no hardware to buy; fit class sets every slot clearance.
+    </p>
+  </section>` : '';
+
   // --- per-part cut list ----------------------------------------------------
   // Prefer explicit parts; else reconstruct rows from sheet items + timber pieces.
   let cutRows = '';
@@ -500,7 +522,7 @@ export function bomToHTML(bom, meta) {
       <tbody>${screwRows || `<tr><td colspan="6" class="empty">No screws scheduled.</td></tr>`}</tbody>
     </table>
   </section>
-${piecesBlock}
+${joineryBlock}${piecesBlock}
   <section>
     <h2>Estimated cost</h2>
     <div class="totals">
@@ -520,6 +542,137 @@ ${warnBlock}
 </div>
 </body>
 </html>`;
+}
+
+// ----------------------------------------------------------------------------
+// Profile geometry → SVG path (shared, DXF-reusable)
+// ----------------------------------------------------------------------------
+/**
+ * Local-space bounding box of a profile { pts, arcs }, including arc bulges.
+ * Returns { minX, minY, w, h } in the profile's own 2-D coords (mm).
+ */
+function profileLocalBBox(profile) {
+  const pts = arr(profile && profile.pts);
+  if (!pts.length) return { minX: 0, minY: 0, w: 0, h: 0 };
+  const xs = [], ys = [];
+  for (const p of pts) { xs.push(p.x); ys.push(p.y); }
+  for (const a of arr(profile.arcs)) {
+    const i = a.after, j = (i + 1) % pts.length;
+    for (const s of sampleArc(pts[i], pts[j], a)) { xs.push(s.x); ys.push(s.y); }
+  }
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  return { minX, minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY };
+}
+
+/**
+ * Build an SVG path `d` string for a closed profile outline { pts, arcs }.
+ * Straight edges become `L`; arc edges become true SVG `A` (elliptical-arc)
+ * commands using each arc's r + large/sweep flags. An optional (dx, dy)
+ * translates every coordinate (used to anchor a profile's bbox to a nesting
+ * slot). Pure geometry — kept standalone so a future DXF writer can reuse it.
+ *
+ * @param {{pts:Array<{x,y}>, arcs?:Array<{after,r,large?,sweep?}>}} profile
+ * @param {number} [dx=0]
+ * @param {number} [dy=0]
+ * @returns {string} the `d` attribute value
+ */
+export function profilePathD(profile, dx = 0, dy = 0) {
+  const pts = arr(profile && profile.pts);
+  if (!pts.length) return '';
+  // Map each starting vertex index -> its outgoing arc (if any).
+  const arcByStart = new Map();
+  for (const a of arr(profile.arcs)) arcByStart.set(a.after, a);
+  const X = (p) => round(p.x + dx, 2);
+  const Y = (p) => round(p.y + dy, 2);
+  const out = [`M ${X(pts[0])} ${Y(pts[0])}`];
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    const a = arcByStart.get(i);
+    if (a) {
+      const r = round(a.r, 3);
+      const large = a.large ? 1 : 0;
+      const sweep = a.sweep ? 1 : 0;
+      out.push(`A ${r} ${r} 0 ${large} ${sweep} ${X(pts[j])} ${Y(pts[j])}`);
+    } else {
+      out.push(`L ${X(pts[j])} ${Y(pts[j])}`);
+    }
+  }
+  out.push('Z');
+  return out.join(' ');
+}
+
+/**
+ * Render a slot { x, y, w, depth, angle } as a small closed rectangle path,
+ * centred on (x, y), `w` across × `depth` deep, rotated by `angle` degrees, then
+ * translated by (dx, dy). Returns the path `d` string in the profile's frame.
+ */
+function slotPathD(slot, dx = 0, dy = 0) {
+  const w = slot.w || 0, d = slot.depth || 0;
+  if (w <= 0 || d <= 0) return '';
+  const a = ((slot.angle || 0) * Math.PI) / 180;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  // Local corners of the notch centred on origin (w across local-x, depth along local-y).
+  const corners = [
+    { x: -w / 2, y: -d / 2 }, { x: w / 2, y: -d / 2 },
+    { x: w / 2, y: d / 2 }, { x: -w / 2, y: d / 2 },
+  ].map((c) => ({
+    x: round(slot.x + (c.x * ca - c.y * sa) + dx, 2),
+    y: round(slot.y + (c.x * sa + c.y * ca) + dy, 2),
+  }));
+  return `M ${corners[0].x} ${corners[0].y} L ${corners[1].x} ${corners[1].y} ` +
+         `L ${corners[2].x} ${corners[2].y} L ${corners[3].x} ${corners[3].y} Z`;
+}
+
+/**
+ * Emit the SVG markup for one profile part nested at (x, y) at the given bbox
+ * orientation: the TRUE outline path (+ slot cutouts + optional dogbone relief
+ * circles), positioned so the profile's local bbox lands exactly where the
+ * fallback <rect> would have. `rot` swaps the placement axes the same way the
+ * rect path does. Returns a markup string (one or more elements).
+ */
+function profilePartMarkup(it, x, y) {
+  const profile = it.profile;
+  const lb = profileLocalBBox(profile);
+  // Anchor the profile's bbox min to the nesting origin (0,0) in the part's own
+  // un-rotated frame; the surrounding <g> handles placement (and rotation).
+  const dx = -lb.minX, dy = -lb.minY;
+  const slots = arr(it.slots);
+  const out = [];
+
+  // Place the part. If rot, rotate 90° about the bbox centre so width/height swap
+  // to match the rect path's iw/ih (rotated nesting). Translate to (x, y).
+  const drawnW = it.rot ? lb.h : lb.w;
+  const drawnH = it.rot ? lb.w : lb.h;
+  let transform = `translate(${round(x, 1)},${round(y, 1)})`;
+  if (it.rot) {
+    // After translate, rotate 90° so the (w×h) outline fills the (h×w) footprint.
+    transform += ` rotate(90) translate(0,${round(-lb.h, 2)})`;
+  }
+  out.push(`<g transform="${transform}">`);
+
+  // True outline.
+  out.push(`<path class="part-outline" d="${profilePathD(profile, dx, dy)}" fill="#cfe2f3" stroke="#2b5d8a" stroke-width="4"/>`);
+
+  // Slot cutouts (drawn on top, white fill so they read as removed material).
+  const rr = reliefRadius();
+  for (const s of slots) {
+    const d = slotPathD(s, dx, dy);
+    if (!d) continue;
+    out.push(`<path class="slot" d="${d}" fill="#ffffff" stroke="#2b5d8a" stroke-width="3"/>`);
+    // Dogbone relief circles at the two inner corners of the notch mouth so a
+    // round bit can clear the corners. Inner corners sit at depth/2 along the
+    // notch's local-y, ±w/2 across.
+    const a = ((s.angle || 0) * Math.PI) / 180;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    for (const sx of [-1, 1]) {
+      const lx = sx * (s.w / 2), ly = s.depth / 2;
+      const cx = round(s.x + (lx * ca - ly * sa) + dx, 2);
+      const cy = round(s.y + (lx * sa + ly * ca) + dy, 2);
+      out.push(`<circle class="relief" cx="${cx}" cy="${cy}" r="${round(rr, 2)}" fill="#ffffff" stroke="#2b5d8a" stroke-width="2"/>`);
+    }
+  }
+  out.push(`</g>`);
+  return { markup: out.join('\n'), drawnW, drawnH, dx, dy };
 }
 
 // ============================================================================
@@ -574,6 +727,7 @@ export function buildCutSheetSVG(bom) {
                       sheetSize, items: placed.map((it) => ({
                         ref: it.ref, name: it.name,
                         w: it.w, h: it.h, x: it.x, y: it.y, rot: it.rot || 0,
+                        profile: it.profile, slots: it.slots,
                       })) });
       }
     } else {
@@ -582,6 +736,7 @@ export function buildCutSheetSVG(bom) {
       const toPack = items.map((it) => ({
         ref: it.ref, name: it.name,
         w: round(it.w || 0), h: round(it.h || 0),
+        profile: it.profile, slots: it.slots,
       })).filter((it) => it.w > 0 && it.h > 0);
       const packed = shelfPack(toPack, sheetSize, count);
       for (let i = 0; i < packed.length; i++) {
@@ -635,7 +790,13 @@ export function buildCutSheetSVG(bom) {
       const ih = it.rot ? round(it.w) : round(it.h);
       const x = round(it.x || 0, 1);
       const y = round(it.y || 0, 1);
-      body.push(`<rect x="${x}" y="${y}" width="${iw}" height="${ih}" fill="#cfe2f3" stroke="#2b5d8a" stroke-width="4"/>`);
+      // Profile parts: draw the TRUE outline (+ slots + relief) at the same nest
+      // spot the bounding rect would occupy. Box parts keep the plain <rect>.
+      if (it.profile && arr(it.profile.pts).length) {
+        body.push(profilePartMarkup(it, x, y).markup);
+      } else {
+        body.push(`<rect x="${x}" y="${y}" width="${iw}" height="${ih}" fill="#cfe2f3" stroke="#2b5d8a" stroke-width="4"/>`);
+      }
       const cx = x + iw / 2;
       const cy = y + ih / 2;
       const label = `${it.ref ? it.ref + '  ' : ''}${round(it.w)}×${round(it.h)}`;
@@ -685,7 +846,8 @@ function shelfPack(items, sheetSize, minSheets = 1) {
       cur = [];
       shelfX = GAP; shelfY = GAP; shelfH = 0;
     }
-    cur.push({ ref: it.ref, name: it.name, w: it.w, h: it.h, x: shelfX, y: shelfY });
+    cur.push({ ref: it.ref, name: it.name, w: it.w, h: it.h, x: shelfX, y: shelfY,
+               profile: it.profile, slots: it.slots });
     shelfX += w + GAP;
     shelfH = Math.max(shelfH, h);
   }
@@ -1026,7 +1188,8 @@ export function buildFullDocHTML(bom, meta = {}) {
     const dims = [round(s.w), round(s.h), round(s.d)].sort((a, b) => b - a);
     const key = p.stock || '';
     if (!sheetGroups.has(key)) sheetGroups.set(key, []);
-    sheetGroups.get(key).push({ ref: p.ref || '', name: p.name || '', w: dims[0], h: dims[1] });
+    sheetGroups.get(key).push({ ref: p.ref || '', name: p.name || '', w: dims[0], h: dims[1],
+                                profile: p.profile, slots: p.slots });
   }
   const cutSheets = [...sheetGroups.entries()].map(([stock, items]) => {
     const b = arr(bom.sheets).find((s) => s.stock === stock) || {};
@@ -1080,6 +1243,23 @@ export function buildFullDocHTML(bom, meta = {}) {
 
   const grand = totals.grandCost != null ? totals.grandCost
     : (totals.sheetCost || 0) + (totals.timberCost || 0) + (totals.screwCost || 0);
+
+  // --- slot-together joinery (screwless designs) ----------------------------
+  // Slot/wedge designs buy no screws; surface the joinery the BOM exposes so the
+  // real exported build sheet still reports how the parts lock together.
+  const joinery = bom.joinery || {};
+  const slotEng = joinery.slotEngagements || 0;
+  const wedgeCt = joinery.wedges || 0;
+  const joineryBlock = (slotEng || wedgeCt) ? `
+  <section>
+    <h2>Slot-together joinery</h2>
+    <table><thead><tr><th>Joint</th><th class="num">Count</th></tr></thead>
+      <tbody>
+        <tr><td>Cross-lap / housing slot engagements</td><td class="num">${esc(slotEng)}</td></tr>
+        <tr><td>Driven tusk wedges</td><td class="num">${esc(wedgeCt)}</td></tr>
+      </tbody></table>
+    <p style="color:#666;font-size:11px;margin-top:8px;">Screwless press-fit joinery — no hardware to buy; fit class sets every slot clearance.</p>
+  </section>` : '';
 
   // Steps + notes as readable HTML (their own page), not baked into the drawing.
   const stepsHTML = arr(meta.steps).map((s) => `<li>${esc(s)}</li>`).join('');
@@ -1169,6 +1349,7 @@ export function buildFullDocHTML(bom, meta = {}) {
     <table><thead><tr><th>Screw</th><th class="num">Count</th><th class="num">Boxes</th><th>Drive</th><th class="num">Cost</th></tr></thead>
       <tbody>${screwRows || `<tr><td colspan="5" style="color:#999">No screws.</td></tr>`}</tbody></table>
   </section>
+${joineryBlock}
 
   <section>
     <h2>Estimated cost</h2>
