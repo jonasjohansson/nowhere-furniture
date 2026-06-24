@@ -90,3 +90,64 @@ test('full build sheet (real path) keeps <rect> and no outline path for box desi
   assert.match(html, /<rect/, 'box parts still render as <rect> on the real path');
   assert.ok(!/class="part-outline"/.test(html), 'box parts get no profile outline path');
 });
+
+// --- Orientation: portrait profile parts must FIT their reserved (sorted) cell -
+// The nester reserves a footprint from the SORTED (max, mid) size dims, so a
+// portrait part gets a LANDSCAPE cell. The drawn outline must be rotated to
+// match, not left in its natural portrait orientation (overflowing the cell).
+
+// Parse an SVG path `d` into its vertex points (M/L coords + each A endpoint).
+function pathPoints(d) {
+  const pts = [];
+  const re = /([MLA])\s+([-\d.\s]+?)(?=[MLAZ]|$)/g;
+  let m;
+  while ((m = re.exec(d))) {
+    const nums = m[2].trim().split(/\s+/).map(Number);
+    if (m[1] === 'M' || m[1] === 'L') pts.push([nums[0], nums[1]]);
+    else if (m[1] === 'A') pts.push([nums[5], nums[6]]); // A rx ry rot large sweep x y
+  }
+  return pts;
+}
+const bboxWH = (pts) => {
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return [Math.round(Math.max(...xs) - Math.min(...xs)), Math.round(Math.max(...ys) - Math.min(...ys))];
+};
+
+// Extract every part-outline path with its <g> transform, apply the transform,
+// and return the multiset of drawn bbox "w x h" strings (in world mm).
+function drawnOutlineFootprints(svg) {
+  const re = /<g transform="translate\(([-\d.]+),([-\d.]+)\)(?:\s+translate\(([-\d.]+),0\)\s+rotate\(90\))?">\s*<path class="part-outline" d="([^"]+)"/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(svg))) {
+    const rotShift = m[3] !== undefined ? +m[3] : null;
+    // rotate branch: translate(rotShift,0) rotate(90) maps (px,py) -> (rotShift - py, px).
+    const pts = pathPoints(m[4]).map(([px, py]) =>
+      rotShift != null ? [rotShift - py, px] : [px, py]);
+    out.push(bboxWH(pts).join('x'));
+  }
+  return out.sort();
+}
+
+test('portrait profile parts are rotated to fit their reserved landscape cell (bench)', () => {
+  const { parts } = build(CNC_SLOT, 'cnc-slot-bench'); // ends 360x422, wedges 26x81 are portrait
+  const sheetParts = parts.filter((p) => p.material === 'sheet');
+  // reserved cells = the sorted (max, mid) footprint the nester reserves per part
+  const reserved = sheetParts.map((p) => {
+    const dims = [p.size.w, p.size.h, p.size.d].sort((a, b) => b - a);
+    return `${Math.round(dims[0])}x${Math.round(dims[1])}`;
+  }).sort();
+  // at least one part is naturally portrait (height > width in its profile bbox)
+  const hasPortrait = sheetParts.some((p) => {
+    const dims = [p.size.w, p.size.h, p.size.d].sort((a, b) => b - a);
+    return dims[0] !== dims[1]; // non-square → a sorted cell that can be mis-oriented
+  });
+  assert.ok(hasPortrait, 'fixture has non-square parts that can be mis-oriented');
+
+  const svg = buildCutSheetSVG(sheetBom(parts));
+  const drawn = drawnOutlineFootprints(svg);
+  // Every drawn outline's bbox must equal a reserved cell (same orientation),
+  // i.e. the two multisets are identical — no part is left 90° off / overflowing.
+  assert.deepEqual(drawn, reserved,
+    'each drawn outline fills its reserved (sorted) cell in the correct orientation');
+});

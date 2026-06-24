@@ -624,13 +624,25 @@ function slotPathD(slot, dx = 0, dy = 0) {
 }
 
 /**
- * Emit the SVG markup for one profile part nested at (x, y) at the given bbox
- * orientation: the TRUE outline path (+ slot cutouts + optional dogbone relief
- * circles), positioned so the profile's local bbox lands exactly where the
- * fallback <rect> would have. `rot` swaps the placement axes the same way the
- * rect path does. Returns a markup string (one or more elements).
+ * Emit the SVG markup for one profile part nested at (x, y) into a reserved cell
+ * of (cellW × cellH) mm: the TRUE outline path (+ slot cutouts + optional dogbone
+ * relief circles), positioned and oriented so it FILLS that reserved cell exactly
+ * where the fallback <rect> would have.
+ *
+ * Orientation reconciliation: the nester reserves a footprint from the SORTED
+ * (max, mid) size dims, so a portrait part is reserved a LANDSCAPE cell. The
+ * profile, however, has its own NATURAL local bbox orientation. We rotate the
+ * drawn outline 90° iff the natural orientation differs from the reserved cell's
+ * orientation, so the outline always aligns to and fits inside its cell (and the
+ * slots/relief rotate with it).
+ *
+ * @param {object} it       packed item (profile, slots)
+ * @param {number} x        cell top-left x (mm)
+ * @param {number} y        cell top-left y (mm)
+ * @param {number} cellW    reserved cell width (mm) — = it.rot ? it.h : it.w
+ * @param {number} cellH    reserved cell height (mm) — = it.rot ? it.w : it.h
  */
-function profilePartMarkup(it, x, y) {
+function profilePartMarkup(it, x, y, cellW, cellH) {
   const profile = it.profile;
   const lb = profileLocalBBox(profile);
   // Anchor the profile's bbox min to the nesting origin (0,0) in the part's own
@@ -639,14 +651,20 @@ function profilePartMarkup(it, x, y) {
   const slots = arr(it.slots);
   const out = [];
 
-  // Place the part. If rot, rotate 90° about the bbox centre so width/height swap
-  // to match the rect path's iw/ih (rotated nesting). Translate to (x, y).
-  const drawnW = it.rot ? lb.h : lb.w;
-  const drawnH = it.rot ? lb.w : lb.h;
+  // Rotate the outline 90° when its NATURAL orientation (landscape iff lb.w>=lb.h)
+  // differs from the RESERVED cell's orientation (landscape iff cellW>=cellH).
+  const naturalLandscape = lb.w >= lb.h;
+  const reservedLandscape = (cellW != null && cellH != null) ? cellW >= cellH : naturalLandscape;
+  const rotate = naturalLandscape !== reservedLandscape;
+
+  const drawnW = rotate ? lb.h : lb.w;
+  const drawnH = rotate ? lb.w : lb.h;
   let transform = `translate(${round(x, 1)},${round(y, 1)})`;
-  if (it.rot) {
-    // After translate, rotate 90° so the (w×h) outline fills the (h×w) footprint.
-    transform += ` rotate(90) translate(0,${round(-lb.h, 2)})`;
+  if (rotate) {
+    // Compose left-to-right (outermost first): shift right by lb.h, THEN rotate
+    // 90° about the origin. A natural point (px,py) in [0,lb.w]×[0,lb.h] maps to
+    // (lb.h - py, px) ∈ [0,lb.h]×[0,lb.w] — i.e. it fills the (h×w) cell.
+    transform += ` translate(${round(lb.h, 2)},0) rotate(90)`;
   }
   out.push(`<g transform="${transform}">`);
 
@@ -688,6 +706,13 @@ function profilePartMarkup(it, x, y) {
  *   - If `items` exist WITHOUT coordinates, OR the BOM gives no items at all,
  *     we self-pack using a simple shelf (first-fit) algorithm purely for
  *     visualisation — this is NOT an optimiser, just a readable picture.
+ *
+ * TRUE PROFILE OUTLINES require each item to carry `profile` (and optional
+ * `slots`) AND its broad-face `w`/`h`. computeBOM()'s own `sheets[].items` do
+ * NOT carry these (collapseItems folds parts to {ref,name,size} only), so calling
+ * buildCutSheetSVG(computeBOM(...)) directly draws plain rects. The app path
+ * (buildFullDocHTML) rebuilds the items from meta.parts WITH profile/slots/w/h —
+ * use that feed (or build equivalent items yourself) to get the slot-cut outlines.
  *
  * @param {object} bom
  * @returns {string} standalone SVG
@@ -793,7 +818,7 @@ export function buildCutSheetSVG(bom) {
       // Profile parts: draw the TRUE outline (+ slots + relief) at the same nest
       // spot the bounding rect would occupy. Box parts keep the plain <rect>.
       if (it.profile && arr(it.profile.pts).length) {
-        body.push(profilePartMarkup(it, x, y).markup);
+        body.push(profilePartMarkup(it, x, y, iw, ih).markup);
       } else {
         body.push(`<rect x="${x}" y="${y}" width="${iw}" height="${ih}" fill="#cfe2f3" stroke="#2b5d8a" stroke-width="4"/>`);
       }

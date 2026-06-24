@@ -274,7 +274,12 @@ export function computeBOM({ parts = [], joints = [] } = {}) {
     const utilisation = areaSheetM2 > 0 ? round2(areaUsedM2 / areaSheetM2) : 0;
     const lineTotal = roundSEK(sheetsNeeded * rec.price);
 
-    // collapse identical parts into items with qty
+    // collapse identical parts into items with qty.
+    // NOTE: these BOM items intentionally carry only {ref,name,size} — NOT the
+    // profile/slots/broad-face w,h that export.js's cut-sheet needs to draw true
+    // outlines. The cut-sheet (buildCutSheetSVG) is fed rebuilt items from the
+    // raw PartSpec[] by buildFullDocHTML; it does not read these BOM items for
+    // geometry. Keep this projector lean.
     const items = collapseItems(group, (p) => ({
       ref: p.ref, name: p.name, size: fmtSize(p.size),
     }));
