@@ -55,7 +55,7 @@
 
 import {
   ERGO,
-  profilePanel, trapezoid, rect, wedge, fin,
+  profilePanel, trapezoid, rect, wedge, fin, oval,
   crossLapSlot, slotJoint, wedgeTenon,
   SHEETS,
 } from '../engineering.js?v=22';
@@ -561,6 +561,159 @@ export const CNC_SLOT = [
           'Turn on the mid spine fin (a central bearer/support under the seat) or add an intermediate trestle for this length.'
         );
       }
+
+      return { parts, joints, steps, notes };
+    },
+  },
+
+  // --------------------------------------------------------------------------
+  // OVAL ROCKER — Nowhere CNC Crew, 2026 (after Andrew Doxtater's "Oval Rocker").
+  // The HEADLINE freeform piece: FOUR IDENTICAL oval profiles cut from one sheet.
+  // Only the slot positions differ per copy. Two ovals STAND vertically as the
+  // two rocker sides (plane 'xy', at z = ±width/2 — each oval's lower arc rides
+  // the floor as the rocker curve); two LIE ACROSS them (plane 'zy', spanning the
+  // width in z) as the SEAT (upper) and a LOWER BRACE. Matching cross-lap notches
+  // interlock all four into a self-bracing rocking cage. No hardware.
+  // --------------------------------------------------------------------------
+  {
+    id: 'cnc-slot-oval-rocker',
+    name: 'Oval Rocker',
+    designer: 'Nowhere CNC Crew',
+    year: 2026,
+    blurb: 'A screwless CNC rocker: four IDENTICAL ovals cut from one sheet cross-lap ' +
+      'into a self-bracing cage — two stand as the rocking sides (their lower arc is ' +
+      'the rocker curve), two lie across as seat and brace. Only the slots differ.',
+    difficulty: 'Medium',
+    buildTime: '60–90 min',
+    params: [
+      { key: 'ovalR',  label: 'Oval radius (half-size)',            min: 240, max: 420, step: 5,  default: 320, unit: 'mm' },
+      { key: 'width',  label: 'Width (between the side ovals)',     min: 360, max: 620, step: 10, default: 480, unit: 'mm' },
+      { key: 'seatH',  label: 'Seat height',                        min: 320, max: 460, step: 5,  default: 380, unit: 'mm' },
+      { key: 'fit',    label: 'Fit class (0 snug,1 std,2 outdoor)', min: 0, max: 2, step: 1, default: 1, unit: '' },
+    ],
+
+    build(p) {
+      const FIT = ['snug', 'standard', 'outdoor'][p.fit] ?? 'standard';
+      const stock = 'ply18';
+      const thk = PLY(stock);                       // 18mm — the mating thickness
+
+      // --- ONE oval outline, reused for all four parts -------------------
+      // A roughly-round oval (aspect ratio kept moderate, ~1.15:1, so oval()'s
+      // circular-arc bbox stays accurate). Built ONCE; every copy below reuses
+      // the SAME {pts,arcs} data — only the per-copy `slots` array differs.
+      const rx = p.ovalR;
+      const ry = Math.round(p.ovalR * 0.87);        // moderate aspect ratio (≈1.15:1)
+      const outline = oval(rx, ry);                 // centred (0,0); bbox ≈ 2rx × 2ry
+      // profilePanel centres the bbox on `pos`, so the oval's own centre lands at
+      // pos. The bbox is ~2rx wide × 2ry tall (oval is centred at the origin).
+
+      // --- Crossing geometry --------------------------------------------
+      // The two SIDE ovals stand in plane 'xy' (faces ±z): their local-x runs in
+      // world-x, local-y in world-y. The two LYING ovals are in plane 'zy' (faces
+      // ±x): their local-x runs in world-z (across the width), local-y in world-y.
+      // The seat oval crosses the sides high (forward of centre, near the top);
+      // the brace oval crosses them low (rearward, near the bottom arc).
+
+      // Local crossing coordinates inside the (centred) oval, in mm offsets from
+      // the oval centre. These are structural anchor points; exact tuning happens
+      // in the 3D view (Task 10). x>0 = toward the front, y>0 = up.
+      const seatLocalX  =  rx * 0.30;               // seat crosses forward-of-centre, high
+      const seatLocalY  =  ry * 0.55;
+      const braceLocalX = -rx * 0.35;               // brace crosses rearward, low
+      const braceLocalY = -ry * 0.40;
+
+      // --- True panel half-lap depths -----------------------------------
+      // Two crossing FLAT panels half-lap: each member's notch is cut from its
+      // own edge inward to the crossing line, and each takes HALF the overlap so
+      // they interlock and mesh flush — exactly the stool's lapH/2 convention
+      // (lapH = the full overlap; depth = lapH/2), hundreds of mm, NOT a thk-deep
+      // face lap. The overlap at a crossing is the shared in-plane extent of the
+      // two ovals along the cut axis: from the crossing line out to the nearer
+      // edge (the oval half-height ry minus the crossing's offset from centre).
+      const seatOverlap  = ry - Math.abs(seatLocalY);   // shared vertical extent at the seat crossing
+      const braceOverlap = ry - Math.abs(braceLocalY);  // ditto at the brace crossing
+      const seatDepth  = seatOverlap  / 2;          // each mating part takes half
+      const braceDepth = braceOverlap / 2;
+
+      // --- Per-copy SLOT maps (the only thing that differs) --------------
+      // CONVENTION (avoid double-counting the crossing offset): each LYING oval's
+      // pos.y already bakes its crossing height (pos.y = centreY + localY), so its
+      // notches are cut at local-y = 0 (the oval centre). The SIDE ovals share one
+      // centre (centreY) and carry both crossings as offsets from it. Result: the
+      // two mating notches of each declared half-lap land on the SAME world point.
+      //
+      // SIDE ovals (plane 'xy'): each carries TWO notches — one where the seat
+      // crosses (offset +seatLocalY from centre), one where the brace crosses.
+      const sideSlots = [
+        crossLapSlot(seatLocalX,  seatLocalY,  thk, seatDepth,  FIT, 0),
+        crossLapSlot(braceLocalX, braceLocalY, thk, braceDepth, FIT, 0),
+      ];
+      // SEAT oval (plane 'zy'): crosses BOTH sides → two notches, one per side, at
+      // the side z-positions mapped into the seat's own local-x (across the width).
+      // local-y = 0 (pos.y already at the crossing height). 90° to mesh square.
+      const halfW = p.width / 2;
+      const seatSlots = [
+        crossLapSlot(-halfW, 0, thk, seatDepth, FIT, 90),
+        crossLapSlot( halfW, 0, thk, seatDepth, FIT, 90),
+      ];
+      // BRACE oval (plane 'zy'): likewise crosses both sides, lower down.
+      const braceSlots = [
+        crossLapSlot(-halfW, 0, thk, braceDepth, FIT, 90),
+        crossLapSlot( halfW, 0, thk, braceDepth, FIT, 90),
+      ];
+
+      // --- Placement -----------------------------------------------------
+      // The oval centre sits at the seat height so the seat oval's crossing lands
+      // near seatH. Side ovals stand at z = ±width/2. Lying ovals span the width
+      // (centred z=0) and meet the sides; the seat sits high, the brace low.
+      const centreY = p.seatH - seatLocalY;         // oval centre so the seat crossing ≈ seatH
+
+      const parts = [];
+
+      // Two SIDE ovals — plane 'xy', flat faces ±z, standing at z = ±width/2.
+      // The lower arc of each rides the floor as the rocker curve. Same outline →
+      // identical bbox; the test asserts byte-identical {pts,arcs}.
+      const sideL = profilePanel('SIDE-L', 'Side oval', stock,
+        { plane: 'xy', pts: outline.pts, arcs: outline.arcs, slots: sideSlots },
+        { x: 0, y: centreY, z: -halfW }, 'Sides');
+      const sideR = profilePanel('SIDE-R', 'Side oval', stock,
+        { plane: 'xy', pts: outline.pts, arcs: outline.arcs, slots: sideSlots },
+        { x: 0, y: centreY, z:  halfW }, 'Sides');
+
+      // SEAT oval — plane 'zy', faces ±x, lying ACROSS the sides high up. Its
+      // local-x runs across the width (world-z), local-y up. Same outline.
+      const seat = profilePanel('SEAT', 'Seat oval', stock,
+        { plane: 'zy', pts: outline.pts, arcs: outline.arcs, slots: seatSlots },
+        { x: seatLocalX, y: centreY + seatLocalY, z: 0 }, 'Seat');
+
+      // BRACE oval — plane 'zy', faces ±x, lying across the sides low down to
+      // triangulate the cage. Same outline.
+      const brace = profilePanel('BRACE', 'Brace oval', stock,
+        { plane: 'zy', pts: outline.pts, arcs: outline.arcs, slots: braceSlots },
+        { x: braceLocalX, y: centreY + braceLocalY, z: 0 }, 'Brace');
+
+      parts.push(sideL, sideR, seat, brace);
+
+      const joints = [
+        slotJoint(2, 'seat oval half-laps into both side ovals (2 cross-lap engagements)'),
+        slotJoint(2, 'brace oval half-laps into both side ovals (2 cross-lap engagements)'),
+      ];
+
+      const w = Math.round(2 * rx), h = Math.round(2 * ry);
+      const steps = [
+        `CNC-cut from one ${stock} sheet: FOUR IDENTICAL ovals (${w}×${h}mm bbox). Only the slot map differs between the four — the outline is one nested shape cut four times.`,
+        `All slots are cut for a ${FIT} fit (${sideSlots[0].w.toFixed(2)}mm wide for ${thk}mm ply). Clear any dogbone reliefs before assembly.`,
+        'Stand the two SIDE ovals on edge, slots facing inward, the width apart — their lower arcs are the rocker curves on the floor.',
+        'Drop the SEAT oval across the tops so its two notches half-lap into both side ovals and mesh flush.',
+        'Drop the BRACE oval across the sides low down the same way to triangulate the cage; tap each crossing home with a mallet over a block.',
+        'Check it rocks smoothly on the two lower arcs and sits square; ease all edges. For outdoor use pick the outdoor fit and oil the ply.',
+      ];
+      const notes = [
+        'Screwless: all four ovals interlock by complementary half-lap notches alone — no hardware. Fit class sets every slot clearance.',
+        'The headline trick: ONE oval outline is nested and cut FOUR times; the parts are byte-identical and differ only by which slots are cut, so it cuts and stores flat from a single 18mm sheet.',
+        'It ROCKS: the two standing ovals sit on their lower arcs, which act as the rocker rails. Keep the oval roughly round so it rocks evenly and the cut bbox stays true.',
+        'Press-fit rockers can loosen with humidity swings; a dab of PVA in the slots makes it permanent if you do not need to flat-pack it again.',
+      ];
 
       return { parts, joints, steps, notes };
     },

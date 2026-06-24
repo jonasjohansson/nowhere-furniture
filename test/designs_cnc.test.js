@@ -94,3 +94,58 @@ test('slab trestle bench: invariants + two slab ends + wedge tenon + span note',
   assert.ok(withSpine.joints.some(j => j.type === 'slot-crosslap' && j.count === 3),
     'spine on → seat slot joint declares 3 engagements');
 });
+
+test('oval rocker: 4 identical oval outlines, slots differ, screwless', () => {
+  const d = byId('cnc-slot-oval-rocker');
+  assertDesignInvariants(d);
+  const p = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(p);
+  const ovals = out.parts.filter(x => x.profile && x.profile.arcs && x.profile.arcs.length);
+  assert.ok(ovals.length === 4, 'four oval profile parts');
+  // identical OUTLINES: same pts (ignoring slots), same bbox
+  const sig = (x) => JSON.stringify({ pts: x.profile.pts, arcs: x.profile.arcs });
+  const sigs = new Set(ovals.map(sig));
+  assert.equal(sigs.size, 1, 'all four ovals share one identical outline');
+  // but the SLOT maps differ across copies (not all identical)
+  const slotSigs = new Set(ovals.map(x => JSON.stringify(x.slots)));
+  assert.ok(slotSigs.size > 1, 'slot maps differ between the ovals');
+  // screwless: only slot-crosslap joints, no screws
+  assert.ok(out.joints.length > 0 && out.joints.every(j => j.type === 'slot-crosslap'),
+    'all joints are slot cross-laps, none screwed');
+  // every part is a ply18 sheet
+  assert.ok(out.parts.every(x => x.material === 'sheet' && x.stock === 'ply18'),
+    'all parts are ply18 sheet');
+  // a lying (seat) oval sits near the seat height
+  assert.ok(out.parts.some(x => Math.abs(x.pos.y - p.seatH) < 120),
+    'a lying oval sits near the seat height');
+
+  // STRUCTURAL MESH: every declared cross-lap's two mating notches must coincide
+  // in WORLD space, and each notch must cut deep enough to reach the crossing
+  // (depth ≫ thk — a real panel half-lap, not a face lap). The oval bbox is
+  // centred on the origin so the builder's bbox-centring maps a slot's local
+  // (x,y) to a simple offset from pos in the part's plane axes.
+  const thk = SHEETS.ply18.thickness;
+  const part = (ref) => out.parts.find(x => x.ref === ref);
+  const slotWorld = (pt, s) => {            // local slot -> world point per the placement convention
+    if (pt.profile.plane === 'zy') return { x: pt.pos.x, y: pt.pos.y + s.y, z: pt.pos.z + s.x };
+    return { x: pt.pos.x + s.x, y: pt.pos.y + s.y, z: pt.pos.z }; // 'xy'
+  };
+  const near = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 1e-6;
+  // The four declared laps: side-L↔seat, side-R↔seat, side-L↔brace, side-R↔brace.
+  // sideSlots[0]=seat crossing, [1]=brace crossing; seat/brace slots[0]=left side, [1]=right side.
+  const sideL = part('SIDE-L'), sideR = part('SIDE-R'), seat = part('SEAT'), brace = part('BRACE');
+  const laps = [
+    [sideL, sideL.slots[0], seat,  seat.slots[0]],
+    [sideR, sideR.slots[0], seat,  seat.slots[1]],
+    [sideL, sideL.slots[1], brace, brace.slots[0]],
+    [sideR, sideR.slots[1], brace, brace.slots[1]],
+  ];
+  for (const [pa, sa, pb, sb] of laps) {
+    assert.ok(near(slotWorld(pa, sa), slotWorld(pb, sb)),
+      `${pa.ref}↔${pb.ref}: mating notches must coincide in world space ` +
+      `(${JSON.stringify(slotWorld(pa, sa))} vs ${JSON.stringify(slotWorld(pb, sb))})`);
+    // both notches mesh to the same crossing depth, and it is a real panel lap (≫ thk)
+    assert.ok(Math.abs(sa.depth - sb.depth) < 1e-6, `${pa.ref}↔${pb.ref}: half-lap depths must match`);
+    assert.ok(sa.depth > thk * 3, `${pa.ref}↔${pb.ref}: notch depth ${sa.depth} must reach the crossing (≫ thk)`);
+  }
+});
