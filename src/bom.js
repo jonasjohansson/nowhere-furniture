@@ -349,6 +349,21 @@ export function computeBOM({ parts = [], joints = [] } = {}) {
   }
   timber.sort((a, b) => a.label.localeCompare(b.label));
 
+  // ------------------------------------------------------------- JOINERY (screwless)
+  // The CNC slot-together family joins with no hardware: 'slot-crosslap' joints
+  // carry a count of cross-lap engagements, 'wedge-tenon' joints a count of
+  // driven wedges. Neither has a `screw` field, so they're invisible to the
+  // screw schedule below (the `j.screw == null` guard). We tally them here so the
+  // BOM positively reports the joinery even when zero screws are bought.
+  let slotEngagements = 0;
+  let wedges = 0;
+  for (const j of joints) {
+    if (!j) continue;
+    if (j.type === 'slot-crosslap') slotEngagements += Number(j.count) || 0;
+    else if (j.type === 'wedge-tenon') wedges += Number(j.count) || 0;
+  }
+  const joinery = { slotEngagements, wedges };
+
   // ------------------------------------------------------------------ SCREWS
   const screwTally = new Map(); // key -> count
   for (const j of joints) {
@@ -393,6 +408,8 @@ export function computeBOM({ parts = [], joints = [] } = {}) {
     plyAreaM2: round2(sheets.reduce((s, r) => s + r.areaUsedM2, 0)),
     timberLengthM: round2(timber.reduce((s, r) => s + r.totalLengthM, 0)),
     screwCount: screws.reduce((s, r) => s + r.count, 0),
+    slotEngagements,
+    wedges,
   };
 
   // Waste is NOT baked into prices (the nest already over-counts sheets/sticks
@@ -401,7 +418,7 @@ export function computeBOM({ parts = [], joints = [] } = {}) {
     warnings.push('Prices are rough SEK estimates — add ~10% for waste, breakage and offcuts you can\'t reuse.');
   }
 
-  return { sheets, timber, screws, totals, warnings };
+  return { sheets, timber, screws, joinery, totals, warnings };
 }
 
 // ----------------------------------------------------------------------------
