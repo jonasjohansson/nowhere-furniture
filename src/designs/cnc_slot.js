@@ -12,9 +12,16 @@
 // ground at y=0; centred on x=z=0. build() is PURE (deterministic, no
 // Date.now/Math.random).
 //
-// First design: the SLOT-IN STOOL — an X of two identical vertical fins that
-// cross-lap at the centre, carrying a flat top panel that slots onto their tab
-// tenons. Two fins + one top = three CNC parts, screwless.
+// Designs in this module:
+//   • SLOT-IN STOOL — an X of two identical vertical fins that cross-lap at the
+//     centre (true 50% half-lap, lapH/2 each), carrying a flat top panel that
+//     slots onto their tab tenons. Two fins + one top = three CNC parts.
+//   • WEDGE LOUNGE CHAIR — two mirrored side fins (from ergonomic anchors via
+//     fin()) with a seat + reclined back that pass THROUGH housings in the fins.
+// Two joinery flavours appear: a 50% HALF-LAP (two members each notch to mid-
+// depth, e.g. the stool's fin↔fin centre) and a THROUGH-HOUSING (one member
+// passes through the other, the housing cut = the mating thickness, e.g. the
+// lounge's seat/back↔fin). Both are expressed with crossLapSlot (see depth below).
 //
 // ----------------------------------------------------------------------------
 // SLOT CONVENTION (read this once — Tasks 6/7/8 and the builder all share it).
@@ -34,11 +41,21 @@
 // Two parts cross-lap by each carrying a complementary HALF-depth notch on their
 // shared line (one cutting in from one edge, the other from the opposite edge)
 // so together they mesh flush. A locating tenon enters a mating THROUGH slot.
+//
+// PROFILE PLACEMENT (Task 10 / builder convention — keep all designs consistent):
+//   • A part's `pos` is its CENTRE, exactly as for box parts; the builder centres
+//     the profile's BOUNDING BOX on `pos`. So designs may author an outline in any
+//     convenient local frame (origin-anchored rect() or centred oval() alike) —
+//     the bbox-centring makes `size` (= bbox) and `pos` (= centre) self-consistent.
+//   • A slot's `angle` is in the PART'S OWN local plane. When two mating parts meet
+//     at different orientations (e.g. a fin housing at 90° vs a panel mortise at
+//     0°), each angle is correct in its own frame; reconciling them into one world
+//     mesh is the builder's job (Task 10), not something a design pre-rotates.
 // ============================================================================
 
 import {
   ERGO,
-  profilePanel, trapezoid, rect,
+  profilePanel, trapezoid, rect, fin,
   crossLapSlot, slotJoint,
   SHEETS,
 } from '../engineering.js?v=22';
@@ -190,6 +207,159 @@ export const CNC_SLOT = [
         'Screwless: the centre half-lap is the structural joint; the two narrow top tenons just locate the seat. Fit class sets every slot clearance.',
         'All three parts nest from a single 18mm ply sheet with the two fins identical, so it cuts and stores flat.',
         'Press-fit stools can loosen with humidity swings; a dab of PVA in the slots makes it permanent if you do not need to flat-pack it again.',
+      ];
+
+      return { parts, joints, steps, notes };
+    },
+  },
+
+  // --------------------------------------------------------------------------
+  // WEDGE LOUNGE CHAIR — Nowhere CNC Crew, 2026.
+  // Two identical side fins (the side silhouette of a low reclined lounger) stand
+  // upright facing each other; a flat SEAT panel and a reclined BACK panel span
+  // between them, each passing THROUGH housings cut in both fins.
+  // Three sheet shapes (2 fins + seat + back = 4 parts), no screws.
+  // --------------------------------------------------------------------------
+  {
+    id: 'cnc-slot-lounge',
+    name: 'Wedge Lounge Chair',
+    designer: 'Nowhere CNC Crew',
+    year: 2026,
+    blurb: 'A screwless CNC lounger: two identical side fins carry a low flat ' +
+      'seat and a reclined back, each panel passing through housings ' +
+      'cut in the fins. Flat-pack, press-fit, cut from one ply sheet.',
+    difficulty: 'Medium',
+    buildTime: '45–60 min',
+    params: [
+      { key: 'seatH',     label: 'Seat height',                      min: 280, max: 420, step: 5,  default: ERGO.lounge.seatH,     unit: 'mm' },
+      { key: 'seatD',     label: 'Seat depth',                       min: 420, max: 620, step: 10, default: ERGO.lounge.seatD,     unit: 'mm' },
+      { key: 'backAngle', label: 'Back recline (deg from seat)',     min: 100, max: 125, step: 1,  default: ERGO.lounge.backAngle, unit: '°'  },
+      { key: 'backH',     label: 'Back height',                      min: 420, max: 620, step: 10, default: ERGO.lounge.backH,     unit: 'mm' },
+      { key: 'width',     label: 'Seat width (between fins)',        min: 420, max: 640, step: 10, default: 540, unit: 'mm' },
+      { key: 'fidelity',  label: 'Edge style (0 faceted,1 curved)',  min: 0, max: 1, step: 1, default: 1, unit: '' },
+      { key: 'fit',       label: 'Fit class (0 snug,1 std,2 outdoor)', min: 0, max: 2, step: 1, default: 1, unit: '' },
+    ],
+
+    build(p) {
+      const FIT = ['snug', 'standard', 'outdoor'][p.fit] ?? 'standard';
+      const FIDELITY = ['poly', 'curve'][p.fidelity] ?? 'curve';
+      const stock = 'ply18';
+      const thk = PLY(stock);                       // 18mm — the mating thickness
+
+      // --- Side-fin anchor model -----------------------------------------
+      // Pure side silhouette in LOCAL profile coords: local-x = front→back depth,
+      // local-y = up (foot on the ground at y=0). Anchor order follows the fin()
+      // convention: front-foot → seat-front → seat-back/pivot → back-top → rear-foot.
+      const rad = (p.backAngle * Math.PI) / 180;     // recline measured from the seat
+      // Back leans BACKWARD: with backAngle>90, cos is negative, so -cos>0 pushes
+      // the back-top rearward (+x) of the pivot. sin gives its rise.
+      const backDX = -p.backH * Math.cos(rad);       // horizontal run of the back
+      const backDY =  p.backH * Math.sin(rad);       // vertical rise of the back
+      const seatFrontX = 0;                          // front of the seat (front foot above it)
+      const seatBackX  = p.seatD;                    // pivot where seat meets back
+      const backTopX   = seatBackX + backDX;
+      const backTopY   = p.seatH + backDY;
+      const rearFootX  = backTopX;                   // rear foot sits under the back-top
+
+      const anchors = [
+        { x: seatFrontX, y: 0 },           // front foot (ground, under seat front)
+        { x: seatFrontX, y: p.seatH },     // seat front (top of the seat lip)
+        { x: seatBackX,  y: p.seatH },     // seat back / back pivot
+        { x: backTopX,   y: backTopY },    // back top
+        { x: rearFootX,  y: 0 },           // rear foot (ground, under the back top)
+      ];
+      const finOutline = fin(anchors, FIDELITY); // { pts, arcs }
+
+      // --- Through-housing slots in the fins -----------------------------
+      // The seat spans z between the fins along the seat segment; the back spans
+      // z along the back segment. Each fin carries a THROUGH-HOUSING where the
+      // panel passes through it — the notch is cut `thk` deep (the mating panel's
+      // thickness) so panel and fin mesh flush. (This is a through-housing, not a
+      // 50% half-lap: the panel runs through the fin rather than the two members
+      // each notching to mid-depth — cf. the stool's fin↔fin lapH/2 cross-lap.)
+      const housingSeat = thk;                       // housing depth = mating thickness (seat)
+      const housingBack = thk;                       // housing depth = mating thickness (back)
+      // Seat-crossing point: mid-seat, at seat height. Notch runs vertically (0°)
+      // down into the fin from the seat top edge.
+      const seatMidX = (seatFrontX + seatBackX) / 2;
+      const seatSlot = crossLapSlot(seatMidX, p.seatH, thk, housingSeat, FIT, 0);
+      // Back-crossing point: mid-back along the reclined segment. Notch rotated to
+      // sit square to the back's lean (90° = across the back face).
+      const backMidX = (seatBackX + backTopX) / 2;
+      const backMidY = (p.seatH + backTopY) / 2;
+      const backSlot = crossLapSlot(backMidX, backMidY, thk, housingBack, FIT, 90);
+      const finSlots = [seatSlot, backSlot];
+
+      // --- Seat & back panels --------------------------------------------
+      // Each is a flat rect spanning `width` in z between the fins. Length along
+      // the panel runs in its own plane-x; the fins are at z = ±width/2 so the
+      // panel mortises align with the fin housings. The panel carries two mating
+      // through-mortises (one per fin) cut at its ends so it seats into the fins.
+      const seatLen = seatBackX - seatFrontX;        // seat board length (depth dir)
+      const backLen = p.backH;                       // back board length (up the lean)
+      const seatProfile = rect(seatLen, p.width);    // origin-anchored in its plane
+      const backProfile = rect(backLen, p.width);
+      // Mortises near each z-end where the board passes through a fin (housing).
+      const mortiseInset = thk;                      // fin sheet thickness from each edge
+      const seatPanelSlots = [
+        crossLapSlot(seatLen / 2, mortiseInset, thk, thk, FIT, 0),
+        crossLapSlot(seatLen / 2, p.width - mortiseInset, thk, thk, FIT, 0),
+      ];
+      const backPanelSlots = [
+        crossLapSlot(backLen / 2, mortiseInset, thk, thk, FIT, 0),
+        crossLapSlot(backLen / 2, p.width - mortiseInset, thk, thk, FIT, 0),
+      ];
+
+      const halfW = p.width / 2;
+      const parts = [];
+
+      // Two identical side fins, plane 'xy' so the flat face is vertical and the
+      // silhouette (local-x = depth runs along world-x, local-y = height up) is the
+      // side profile. They stand facing each other at z = ±width/2. Same outline →
+      // identical bbox (the test asserts this).
+      const finL = profilePanel('FIN-L', 'Side fin', stock,
+        { plane: 'xy', ...finOutline, slots: finSlots },
+        { x: 0, y: 0, z: -halfW }, 'Sides');
+      const finR = profilePanel('FIN-R', 'Side fin', stock,
+        { plane: 'xy', ...finOutline, slots: finSlots },
+        { x: 0, y: 0, z:  halfW }, 'Sides');
+
+      // Seat panel: flat-ish board running in depth (world-x) and width (world-z).
+      // plane 'xz' lies flat (thickness up); its profile-x is the seat length and
+      // profile-y is the width. Placed at the seat height, spanning the seat depth.
+      const seat = profilePanel('SEAT', 'Seat', stock,
+        { plane: 'xz', ...seatProfile, slots: seatPanelSlots },
+        { x: seatMidX, y: p.seatH - thk / 2, z: 0 }, 'Seat');
+
+      // Back panel: an upright board facing the sitter, leaning at backAngle. Built
+      // in plane 'xz' too (its local x = length up the back, local y = width). It is
+      // placed at the mid-back point; full 3D tilt is a later tuning task, but the
+      // joinery (housing into the fins) is correct.
+      const back = profilePanel('BACK', 'Back', stock,
+        { plane: 'xz', ...backProfile, slots: backPanelSlots },
+        { x: backMidX, y: backMidY, z: 0 }, 'Back');
+
+      parts.push(finL, finR, seat, back);
+
+      const joints = [
+        slotJoint(2, 'seat board passes through a housing in each side fin (2 engagements)'),
+        slotJoint(2, 'back board passes through a housing in each side fin (2 engagements)'),
+      ];
+
+      const seatHr = Math.round(p.seatH);
+      const recliner = Math.round(p.backAngle);
+      const steps = [
+        `CNC-cut from one ${stock} sheet: 2 identical side fins (${Math.round(rearFootX)}mm deep, ${Math.round(backTopY)}mm tall) + 1 seat ${Math.round(seatLen)}×${p.width}mm + 1 back ${Math.round(backLen)}×${p.width}mm.`,
+        `All slots are cut for a ${FIT} fit (${seatSlot.w.toFixed(2)}mm wide for ${thk}mm ply). Clear any dogbone reliefs before assembly.`,
+        'Stand the two side fins upright, slot side up, facing each other the seat width apart.',
+        `Drop the seat board into the seat housings (seat top at ${seatHr}mm) so it meshes flush with both fins.`,
+        `Lower the back board into the reclined back housings (${recliner}° recline) so it locks the fins together.`,
+        'Check the lounger sits flat and rocks on no foot; ease all edges. For outdoor use pick the outdoor fit and oil the ply.',
+      ];
+      const notes = [
+        'Screwless: the four housings lock the seat, back and both fins into one rigid frame. Fit class sets every slot clearance.',
+        'All four parts nest from a single 18mm ply sheet with the two fins identical, so it cuts and stores flat.',
+        'Press-fit loungers can loosen with humidity swings; a dab of PVA in the slots makes it permanent if you do not need to flat-pack it again.',
       ];
 
       return { parts, joints, steps, notes };

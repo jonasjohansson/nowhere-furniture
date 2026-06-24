@@ -48,3 +48,24 @@ test('slot-in stool: registered + invariants + has slots', () => {
     'at least one profile part carries cross-lap slots');
   assert.ok(out.joints.some(j => j.type === 'slot-crosslap'), 'has a slot joint');
 });
+
+test('wedge lounge chair: invariants + two mirrored side fins + recline', () => {
+  const d = byId('cnc-slot-lounge');
+  assertDesignInvariants(d);
+  const p = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(p);
+  // two side fins, same outline (mirrored): same bbox
+  const fins = out.parts.filter(x => /fin|side/i.test(x.ref) || x.group === 'Sides');
+  assert.ok(fins.length === 2, 'exactly two side fins');
+  const bb = (x) => JSON.stringify(profileBBox(x.profile));
+  assert.equal(bb(fins[0]), bb(fins[1]), 'side fins share an outline');
+  // seat + back panels cross-lap through the fins (slot joints, screwless)
+  assert.ok(out.joints.some(j => j.type === 'slot-crosslap'), 'has slot joints');
+  assert.ok(out.parts.some(x => x.profile && x.slots && x.slots.length), 'slotted parts');
+  // recline + ergonomics: seat sits near seatH, back rises above the seat.
+  const fin = fins[0];
+  const topY = Math.max(...fin.profile.pts.map(pt => pt.y));
+  assert.ok(topY > p.seatH, 'back rises above the seat height');
+  assert.ok(fin.profile.pts.some(pt => Math.abs(pt.y - p.seatH) < 60),
+    'a seat-front anchor sits near seatH');
+});
