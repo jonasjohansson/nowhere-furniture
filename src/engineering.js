@@ -173,6 +173,80 @@ export function cleat(ref, stockKey, length, axis, pos, group) {
 }
 
 // ----------------------------------------------------------------------------
+// 5b. PROFILE PARTS — a plywood part defined by a 2-D OUTLINE (points + optional
+// arcs) instead of a box, for CNC slot-together shapes (curved fins, brackets).
+// A profile is { plane, pts:[{x,y}...], arcs:[{after:i, r, large?, sweep?}...] }:
+// an arc entry bends the straight segment AFTER pts[i] (to pts[(i+1)%n], so it
+// wraps on the closing edge) into a circular arc of radius r (SVG arc flags).
+// ----------------------------------------------------------------------------
+
+// Sample N points along a circular arc from A to B with radius r (SVG arc
+// semantics for large/sweep). Pure; ~12 samples. Returns [{x,y}...].
+export function sampleArc(A, B, { r, large = false, sweep = false }, n = 12) {
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord === 0) return [{ x: A.x, y: A.y }];
+  // clamp radius so the circle can still reach both ends (no NaN on a too-small r)
+  const rad = Math.max(r, chord / 2);
+  // midpoint of the chord, and the perpendicular distance from it to the centre
+  const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
+  const h = Math.sqrt(Math.max(0, rad * rad - (chord / 2) * (chord / 2)));
+  // unit perpendicular to the chord; pick the side from large/sweep (SVG rule)
+  const ux = -dy / chord, uy = dx / chord;
+  const sign = (large !== sweep) ? 1 : -1;
+  const cx = mx + sign * h * ux, cy = my + sign * h * uy;
+  // walk the swept angle from A to B in n steps
+  let a0 = Math.atan2(A.y - cy, A.x - cx);
+  let a1 = Math.atan2(B.y - cy, B.x - cx);
+  let sweepAngle = a1 - a0;
+  if (sweep) { if (sweepAngle < 0) sweepAngle += 2 * Math.PI; }
+  else       { if (sweepAngle > 0) sweepAngle -= 2 * Math.PI; }
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const t = a0 + sweepAngle * (i / n);
+    out.push({ x: cx + rad * Math.cos(t), y: cy + rad * Math.sin(t) });
+  }
+  return out;
+}
+
+/**
+ * Bounding box {w,h} of a 2-D profile (points + optional arcs), mm.
+ * Arcs are sampled so the bulge is included. Straight-only profiles use just pts.
+ */
+export function profileBBox(profile) {
+  const pts = profile.pts || [];
+  if (pts.length === 0) return { w: 0, h: 0 };
+  const xs = [], ys = [];
+  for (const p of pts) { xs.push(p.x); ys.push(p.y); }
+  for (const a of (profile.arcs || [])) {
+    const i = a.after, j = (i + 1) % pts.length;
+    for (const s of sampleArc(pts[i], pts[j], a)) { xs.push(s.x); ys.push(s.y); }
+  }
+  return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+}
+
+/**
+ * A plywood part defined by a 2-D PROFILE instead of a box. plane = flat-face
+ * orientation (same convention as panel()). size = profile bounding box (compat
+ * shim for BOM/dims/selection); thickness from the sheet stock lands on the
+ * out-of-plane axis.
+ */
+export function profilePanel(ref, name, stockKey, profile, pos, group) {
+  const th = SHEETS[stockKey] ? SHEETS[stockKey].thickness : 18;
+  const bb = profileBBox(profile);
+  let size;
+  if (profile.plane === 'xz')      size = { w: bb.w, h: th,  d: bb.h };
+  else if (profile.plane === 'zy') size = { w: th,  h: bb.h, d: bb.w };
+  else                             size = { w: bb.w, h: bb.h, d: th }; // 'xy'
+  return {
+    ref, name, material: 'sheet', stock: stockKey,
+    size, pos: { ...pos }, rot: { x: 0, y: 0, z: 0 }, group,
+    profile: { plane: profile.plane || 'xy', pts: profile.pts, arcs: profile.arcs || [] },
+    slots: profile.slots || [],
+  };
+}
+
+// ----------------------------------------------------------------------------
 // 6. SUB-ASSEMBLIES — common, well-braced structures in one call.
 // ----------------------------------------------------------------------------
 /**
