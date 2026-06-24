@@ -27,7 +27,8 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM } from './stock.js?v=22';
+import { SHEETS, TIMBER, MM, RELIEF, reliefRadius } from './stock.js?v=22';
+import { profileBBox, sampleArc } from './engineering.js?v=22';
 import { disposeWoodCache } from './wood.js?v=22';
 import { materialMaterial } from './materials.js?v=22';
 import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=22';
@@ -66,6 +67,16 @@ function hashString(str) {
     h = Math.imul(h, 0x01000193);
   }
   return h >>> 0;
+}
+
+/** Deep-copy a CNC profile ({plane, pts, arcs}) so spec snapshots/clones stay
+ *  independent (pts/arcs are arrays of objects shared by a plain spread). */
+function deepCopyProfile(p) {
+  return {
+    plane: p.plane,
+    pts: (p.pts || []).map((pt) => ({ ...pt })),
+    arcs: (p.arcs || []).map((a) => ({ ...a })),
+  };
 }
 
 /** mulberry32 — tiny deterministic PRNG seeded from a uint. Returns a function
@@ -851,6 +862,12 @@ export class Builder {
       rot: { x: rot.x || 0, y: rot.y || 0, z: rot.z || 0 },
       group: s.group,
       color: s.color,
+      // Preserve the optional CNC profile + slots so geometry rebuilds and
+      // history snapshots keep rendering the extruded outline (not a fallback
+      // box). Plain box parts simply don't carry these. Deep-copied so snapshots
+      // stay independent, matching the fresh-object invariant of the fields above.
+      ...(s.profile ? { profile: deepCopyProfile(s.profile) } : {}),
+      ...(s.slots ? { slots: s.slots.map((sl) => ({ ...sl })) } : {}),
     };
   }
 
@@ -865,10 +882,144 @@ export class Builder {
       rot: { x: spec.rot.x, y: spec.rot.y, z: spec.rot.z },
       ...(spec.group != null ? { group: spec.group } : {}),
       ...(spec.color != null ? { color: spec.color } : {}),
+      // Deep-copy profile/slots so a clone is fully independent (the rest of this
+      // method rebuilds every field into fresh objects).
+      ...(spec.profile ? { profile: deepCopyProfile(spec.profile) } : {}),
+      ...(spec.slots ? { slots: spec.slots.map((s) => ({ ...s })) } : {}),
     };
   }
 
   // --- mesh construction -------------------------------------------------
+
+  /**
+   * Build an EXTRUDED PROFILE geometry (metres) for a part that carries a 2-D
+   * `profile` + optional `slots`, centred on its own origin so the mesh position
+   * == part centre (same contract as the box path). See _makeProfileGeometry for
+   * the bbox-centring + plane→rotation conventions.
+   *
+   * Returns null if the profile is degenerate (no usable outline), so the caller
+   * falls back to the box path.
+   */
+  _makeProfileGeometry(spec) {
+    const profile = spec.profile;
+    const pts = profile && profile.pts;
+    if (!pts || pts.length < 3) return null;
+
+    // --- bbox-centring offset (mm) ---------------------------------------
+    // `pos` is the part CENTRE and the builder centres the profile's BOUNDING
+    // BOX on `pos`. Authors may lay the outline out in any local frame (origin-
+    // anchored rect(), centred oval(), …); subtracting the bbox centre from
+    // every point puts the bbox centre at the local origin, so the mesh — placed
+    // at pos — is centred exactly like a box. profileBBox samples arcs so the
+    // bulge is included (matches the `size` the factory derived).
+    const bb = profileBBox(profile);
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    // Include arc bulge in the min so the centre offset matches profileBBox's w/h.
+    for (const a of (profile.arcs || [])) {
+      const i = a.after, j = (i + 1) % pts.length;
+      for (const s of sampleArc(pts[i], pts[j], a)) { xs.push(s.x); ys.push(s.y); }
+    }
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    const cxMM = minX + bb.w / 2; // bbox centre in local mm
+    const cyMM = minY + bb.h / 2;
+    // Local-mm point -> centred scene point (metres).
+    const P = (x, y) => ({ x: (x - cxMM) * MM, y: (y - cyMM) * MM });
+
+    // --- build the outline Shape -----------------------------------------
+    // Arcs are keyed by `after:i` (bend the segment pts[i]→pts[(i+1)%n]); build a
+    // lookup so we can substitute sampled arc points for that straight segment.
+    const arcByAfter = new Map();
+    for (const a of (profile.arcs || [])) arcByAfter.set(a.after, a);
+
+    const shape = new THREE.Shape();
+    const first = P(pts[0].x, pts[0].y);
+    shape.moveTo(first.x, first.y);
+    for (let i = 0; i < pts.length; i++) {
+      const next = pts[(i + 1) % pts.length];
+      const arc = arcByAfter.get(i);
+      if (arc) {
+        // Sample the arc from pts[i]→next and lineTo each sample (robust, no
+        // dependence on THREE's absarc edge cases). Skip the first sample (==
+        // current point) to avoid a zero-length segment.
+        const samples = sampleArc(pts[i], next, arc);
+        for (let k = 1; k < samples.length; k++) {
+          const q = P(samples[k].x, samples[k].y);
+          shape.lineTo(q.x, q.y);
+        }
+      } else {
+        const q = P(next.x, next.y);
+        shape.lineTo(q.x, q.y);
+      }
+    }
+
+    // --- cut the slots as holes ------------------------------------------
+    // Each slot is a rectangular notch (width `w` across, `depth` into the part)
+    // centred at (x,y) in the SAME local coords, rotated by `angle` in the local
+    // plane. We push it as a THREE.Path hole on the shape (correct for interior
+    // mortises; for an open-edge notch the hole reads correctly visually too).
+    // Optional dogbone relief circles at the two INNER corners (the corners at
+    // the bottom of the cut) so press-fit clearance reads in the 3D view.
+    const relMM = reliefRadius() * MM;
+    for (const slot of (spec.slots || [])) {
+      const cx = (slot.x - cxMM) * MM;
+      const cy = (slot.y - cyMM) * MM;
+      const hw = (slot.w * MM) / 2;     // half width across the cut
+      const dp = slot.depth * MM;       // depth into the part
+      const ang = (slot.angle || 0) * DEG;
+      const cosA = Math.cos(ang), sinA = Math.sin(ang);
+      // Local notch rect, BEFORE rotation, centred at the slot point: it spans
+      // ±hw across local-x and runs ±dp/2 along local-y (depth direction). The
+      // `angle` then rotates this notch within the plane.
+      const corners = [
+        [-hw, -dp / 2], [hw, -dp / 2], [hw, dp / 2], [-hw, dp / 2],
+      ].map(([lx, ly]) => [
+        cx + lx * cosA - ly * sinA,
+        cy + lx * sinA + ly * cosA,
+      ]);
+      const hole = new THREE.Path();
+      hole.moveTo(corners[0][0], corners[0][1]);
+      for (let i = 1; i < corners.length; i++) hole.lineTo(corners[i][0], corners[i][1]);
+      hole.lineTo(corners[0][0], corners[0][1]);
+      shape.holes.push(hole);
+      // Dogbone relief: a small circle at each of the two corners along the
+      // bottom edge of the cut so the inner corners are over-cut (CNC reality).
+      if (RELIEF && RELIEF.kind === 'dogbone' && relMM > 0) {
+        for (const [bx, by] of [corners[1], corners[2]]) {
+          const r = new THREE.Path();
+          r.absarc(bx, by, relMM, 0, Math.PI * 2, false);
+          shape.holes.push(r);
+        }
+      }
+    }
+
+    // --- extrude + centre on thickness -----------------------------------
+    // Thickness = the size's OUT-OF-PLANE dimension (= sheet thickness): for
+    // 'xy' that's d, for 'xz' that's h, for 'zy' that's w.
+    const plane = profile.plane || 'xy';
+    const thickMM =
+      plane === 'xz' ? spec.size.h :
+      plane === 'zy' ? spec.size.w :
+      spec.size.d;
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: thickMM * MM, bevelEnabled: false, steps: 1, curveSegments: 12,
+    });
+    // ExtrudeGeometry extrudes from z=0 toward +z; shift back by half so the
+    // slab straddles z=0 and the part ends up centred on `pos` like a box.
+    geo.translate(0, 0, -(thickMM * MM) / 2);
+
+    // --- orient by plane --------------------------------------------------
+    // Default extrude axis is +z (flat face toward ±z) == plane 'xy'. Rotate the
+    // GEOMETRY so the flat face matches the part's plane; the part's own `rot`
+    // (degrees) is then applied on the MESH on top, exactly as the box path does.
+    //   'xy' : no rotation (thickness along z).
+    //   'xz' : rotate -90° about world X  -> thickness runs along y, lies flat.
+    //   'zy' : rotate +90° about world Y  -> thickness runs along x, faces ±x.
+    if (plane === 'xz') geo.rotateX(-Math.PI / 2);
+    else if (plane === 'zy') geo.rotateY(Math.PI / 2);
+
+    return geo;
+  }
 
   /** Build a mesh + bookkeeping record from a spec; register and return it. */
   _buildPart(rawSpec) {
@@ -879,11 +1030,14 @@ export class Builder {
     // or its id. Drives grain direction, tint/offset jitter — NO Math.random.
     const seed = hashString(`${spec.ref || ''}|${spec.stock || ''}|${id}`);
 
-    // Geometry in METRES (mm * MM). Box centred on its own origin so the mesh
-    // position == part centre, matching PartSpec.pos semantics.
-    const geo = new THREE.BoxGeometry(
-      spec.size.w * MM, spec.size.h * MM, spec.size.d * MM
-    );
+    // Geometry in METRES (mm * MM). A part carrying a 2-D `profile` extrudes that
+    // outline (with slot cuts), oriented + centred to match the box contract;
+    // every other part keeps the plain box path unchanged. Box centred on its own
+    // origin so the mesh position == part centre, matching PartSpec.pos semantics.
+    const geo = (spec.profile && this._makeProfileGeometry(spec))
+      || new THREE.BoxGeometry(
+        spec.size.w * MM, spec.size.h * MM, spec.size.d * MM
+      );
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.72, metalness: 0.0 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
@@ -912,9 +1066,13 @@ export class Builder {
   _rebuildGeometry(item) {
     const { size } = item.spec;
     item.mesh.geometry.dispose();
-    item.mesh.geometry = new THREE.BoxGeometry(
-      size.w * MM, size.h * MM, size.d * MM
-    );
+    // Profile parts re-extrude their outline (with slot cuts), so a stock change
+    // (e.g. a new sheet thickness) updates the slab thickness; box parts rebuild
+    // a plain box. _makeProfileGeometry falls back to null on a bad outline.
+    item.mesh.geometry = (item.spec.profile && this._makeProfileGeometry(item.spec))
+      || new THREE.BoxGeometry(
+        size.w * MM, size.h * MM, size.d * MM
+      );
     // Rebuild edges to match the new box.
     item.edges.geometry.dispose();
     item.edges.geometry = new THREE.EdgesGeometry(item.mesh.geometry, 1);

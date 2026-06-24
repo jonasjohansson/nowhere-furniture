@@ -4,7 +4,7 @@
 // a set of member factories so designs are sound + consistent, not raw boxes.
 // All metric, millimetres. Members return PartSpec (see stock.js contract).
 // ============================================================================
-import { SHEETS, TIMBER, SCREWS, SCREW_KEYS } from './stock.js?v=22';
+import { SHEETS, TIMBER, SCREWS, SCREW_KEYS, slotWidth } from './stock.js?v=22';
 
 // ----------------------------------------------------------------------------
 // 1. ERGONOMICS — seating geometry presets (mm / degrees). Honest, comfortable.
@@ -74,6 +74,22 @@ export function panelEdgeJoint(panelStockKey, edgeLenMm, spacing = 220, note) {
 // lap / face joint between two panels or panel+thick member.
 export function faceJoint(nearMm, count = 4, note) {
   return { type: 'torx-face', screw: screwForThickness(nearMm), count, note };
+}
+
+// --- screwless joints (CNC slot-together plywood) -------------------------
+/** A cross-lap / tab notch at (x,y) in a profile's local plane. Width keys to
+ *  the MATING sheet thickness + fit clearance; depth is how far the notch cuts
+ *  in (typically half the part depth for a 50% cross-lap). angle in degrees. */
+export function crossLapSlot(x, y, mateThk, depth, fit = 'standard', angle = 0) {
+  return { x, y, w: slotWidth(mateThk, fit), depth, angle };
+}
+/** Screwless cross-lap/tab joint — count = number of slot engagements. */
+export function slotJoint(count, note) {
+  return { type: 'slot-crosslap', count, note };
+}
+/** Tab-through-mortise locked by a driven wedge. count = number of wedges. */
+export function wedgeTenon(tabThk, len, count, note) {
+  return { type: 'wedge-tenon', count, note };
 }
 
 // ----------------------------------------------------------------------------
@@ -173,6 +189,174 @@ export function cleat(ref, stockKey, length, axis, pos, group) {
 }
 
 // ----------------------------------------------------------------------------
+// 5b. PROFILE PARTS — a plywood part defined by a 2-D OUTLINE (points + optional
+// arcs) instead of a box, for CNC slot-together shapes (curved fins, brackets).
+// A profile is { plane, pts:[{x,y}...], arcs:[{after:i, r, large?, sweep?}...] }:
+// an arc entry bends the straight segment AFTER pts[i] (to pts[(i+1)%n], so it
+// wraps on the closing edge) into a circular arc of radius r (SVG arc flags).
+// ----------------------------------------------------------------------------
+
+// Sample N points along a circular arc from A to B with radius r (SVG arc
+// semantics for large/sweep). Pure; ~12 samples. Returns [{x,y}...].
+export function sampleArc(A, B, { r, large = false, sweep = false }, n = 12) {
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord === 0) return [{ x: A.x, y: A.y }];
+  // clamp radius so the circle can still reach both ends (no NaN on a too-small r)
+  const rad = Math.max(r, chord / 2);
+  // midpoint of the chord, and the perpendicular distance from it to the centre
+  const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
+  const h = Math.sqrt(Math.max(0, rad * rad - (chord / 2) * (chord / 2)));
+  // unit perpendicular to the chord; pick the side from large/sweep (SVG rule)
+  const ux = -dy / chord, uy = dx / chord;
+  const sign = (large !== sweep) ? 1 : -1;
+  const cx = mx + sign * h * ux, cy = my + sign * h * uy;
+  // walk the swept angle from A to B in n steps
+  let a0 = Math.atan2(A.y - cy, A.x - cx);
+  let a1 = Math.atan2(B.y - cy, B.x - cx);
+  let sweepAngle = a1 - a0;
+  if (sweep) { if (sweepAngle < 0) sweepAngle += 2 * Math.PI; }
+  else       { if (sweepAngle > 0) sweepAngle -= 2 * Math.PI; }
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const t = a0 + sweepAngle * (i / n);
+    out.push({ x: cx + rad * Math.cos(t), y: cy + rad * Math.sin(t) });
+  }
+  return out;
+}
+
+/**
+ * Bounding box {w,h} of a 2-D profile (points + optional arcs), mm.
+ * Arcs are sampled so the bulge is included. Straight-only profiles use just pts.
+ */
+export function profileBBox(profile) {
+  const pts = profile.pts || [];
+  if (pts.length === 0) return { w: 0, h: 0 };
+  const xs = [], ys = [];
+  for (const p of pts) { xs.push(p.x); ys.push(p.y); }
+  for (const a of (profile.arcs || [])) {
+    const i = a.after, j = (i + 1) % pts.length;
+    for (const s of sampleArc(pts[i], pts[j], a)) { xs.push(s.x); ys.push(s.y); }
+  }
+  return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+}
+
+/**
+ * A plywood part defined by a 2-D PROFILE instead of a box. plane = flat-face
+ * orientation (same convention as panel()). size = profile bounding box (compat
+ * shim for BOM/dims/selection); thickness from the sheet stock lands on the
+ * out-of-plane axis.
+ */
+export function profilePanel(ref, name, stockKey, profile, pos, group) {
+  const th = SHEETS[stockKey] ? SHEETS[stockKey].thickness : 18;
+  const bb = profileBBox(profile);
+  let size;
+  if (profile.plane === 'xz')      size = { w: bb.w, h: th,  d: bb.h };
+  else if (profile.plane === 'zy') size = { w: th,  h: bb.h, d: bb.w };
+  else                             size = { w: bb.w, h: bb.h, d: th }; // 'xy'
+  return {
+    ref, name, material: 'sheet', stock: stockKey,
+    size, pos: { ...pos }, rot: { x: 0, y: 0, z: 0 }, group,
+    profile: { plane: profile.plane || 'xy', pts: profile.pts, arcs: profile.arcs || [] },
+    slots: profile.slots || [],
+  };
+}
+
+// --- OUTLINE GENERATORS --------------------------------------------------
+// Pure helpers that RETURN just the outline data { pts, arcs } (NOT a full
+// profilePanel). A design passes the result to profilePanel() together with a
+// plane. arcs defaults to [] (a straight-edged polygon). All units mm.
+
+/**
+ * 4-point rectangle, origin-anchored at the bottom-left: corners are
+ * (0,0),(w,0),(w,h),(0,h) walked counter-clockwise. arcs = [].
+ */
+export function rect(w, h) {
+  return { pts: [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }], arcs: [] };
+}
+
+/**
+ * Leg profile: a symmetric trapezoid (or triangle) with a wide base of width w
+ * at y=0 and a top edge narrowed by topInset on EACH side at y=h. Base spans
+ * x in [0,w]; top spans [topInset, w-topInset]. 4 points, arcs = [].
+ */
+export function wedge(w, h, topInset) {
+  return {
+    pts: [
+      { x: 0, y: 0 }, { x: w, y: 0 },
+      { x: w - topInset, y: h }, { x: topInset, y: h },
+    ],
+    arcs: [],
+  };
+}
+
+/**
+ * Symmetric trapezoid centred on x=0: bottom edge of width bottomW at y=0, top
+ * edge of width topW at y=h. 4 points, arcs = [].
+ */
+export function trapezoid(bottomW, topW, h) {
+  const hb = bottomW / 2, ht = topW / 2;
+  return {
+    pts: [
+      { x: -hb, y: 0 }, { x: hb, y: 0 },
+      { x: ht, y: h }, { x: -ht, y: h },
+    ],
+    arcs: [],
+  };
+}
+
+/**
+ * Ellipse-ish outline centred on (0,0), built from the four cardinal points
+ * (±rx,0),(0,±ry) joined by four CIRCULAR arcs (sweep:true, bulging outward).
+ *
+ * APPROXIMATION: sampleArc only draws circular arcs, so for rx!=ry this is not a
+ * true ellipse — each arc uses a representative radius r=max(rx,ry). A single
+ * circular quadrant arc through two cardinal points unavoidably overshoots one
+ * axis (it cannot follow an ellipse), so the bbox only equals 2rx x 2ry for
+ * roughly round ovals; overshoot grows with the rx:ry ratio (negligible up to
+ * ~1.5:1 — the range these designs use — and material past ~3:1). Keep oval()
+ * calls to moderate aspect ratios; for a true ellipse you'd sample it as a
+ * polyline instead. Points run counter-clockwise.
+ */
+export function oval(rx, ry) {
+  const r = Math.max(rx, ry);
+  return {
+    pts: [{ x: rx, y: 0 }, { x: 0, y: ry }, { x: -rx, y: 0 }, { x: 0, y: -ry }],
+    arcs: [
+      { after: 0, r, sweep: true },
+      { after: 1, r, sweep: true },
+      { after: 2, r, sweep: true },
+      { after: 3, r, sweep: true },
+    ],
+  };
+}
+
+/**
+ * Connect an ordered array of ergonomic anchor points into a fin/side outline.
+ * Anchor order convention (any length >= 2; nothing hard-coded to 5):
+ *   front-foot -> seat-front -> seat-back/pivot -> back-top -> rear-foot.
+ * fidelity === 'poly'  -> straight segments: { pts:[...anchorPts], arcs:[] }.
+ * fidelity === 'curve' -> same pts, but a fillet arc is inserted on each
+ *   INTERIOR corner (every anchor except the two endpoints) so the segments
+ *   meeting there round off instead of forming a sharp vertex. Each fillet
+ *   bends the segment leaving the interior point; radius scales with the
+ *   shorter adjacent edge so it never overruns a segment.
+ */
+export function fin(anchorPts, fidelity) {
+  const pts = anchorPts.map((p) => ({ x: p.x, y: p.y }));
+  if (fidelity !== 'curve' || pts.length < 3) return { pts, arcs: [] };
+  const arcs = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], prev = pts[i - 1];
+    const lenIn = Math.hypot(a.x - prev.x, a.y - prev.y);
+    const lenOut = Math.hypot(b.x - a.x, b.y - a.y);
+    const r = Math.max(1, Math.min(lenIn, lenOut) / 2);
+    arcs.push({ after: i, r, sweep: false });
+  }
+  return { pts, arcs };
+}
+
+// ----------------------------------------------------------------------------
 // 6. SUB-ASSEMBLIES — common, well-braced structures in one call.
 // ----------------------------------------------------------------------------
 /**
@@ -211,13 +395,23 @@ export function frameBase(opts) {
 // 7. ASSEMBLY + REVIEW helpers — designs may attach human-readable build info.
 // ----------------------------------------------------------------------------
 /** Quick sanity review of a built design; returns warning strings. */
-export function reviewBuild({ parts = [], seatH, seatSpan, seatStock }) {
+export function reviewBuild({ parts = [], seatH, seatSpan, seatStock, sheetSpan, sheetThicknessMm, slotWebMm }) {
   const notes = [];
   if (seatSpan && seatStock && seatSpan > beamMaxSpan(seatStock)) {
     notes.push(`Seat bearer span ${seatSpan}mm exceeds ~${beamMaxSpan(seatStock)}mm advisable for ${seatStock} — add a mid bearer.`);
   }
   if (seatH && (seatH < 300 || seatH > 480)) {
     notes.push(`Seat height ${seatH}mm is outside the comfortable 300-480mm range.`);
+  }
+  // Plywood plate sag: deflection ∝ span⁴ / thickness³. ~750mm is the limit at
+  // 18mm, i.e. span ≈ 41.7 × thickness before a spine/mid-bearer is needed.
+  if (sheetSpan && sheetThicknessMm && sheetSpan > 41.7 * sheetThicknessMm) {
+    notes.push(`Unsupported ${sheetThicknessMm}mm sheet span ${sheetSpan}mm exceeds ~${Math.round(41.7 * sheetThicknessMm)}mm — add a spine or mid-bearer.`);
+  }
+  // Slot web: material between a slot and the panel edge must be ≥ 1.5× sheet
+  // thickness or the tab can shear out.
+  if (slotWebMm && sheetThicknessMm && slotWebMm < 1.5 * sheetThicknessMm) {
+    notes.push(`Slot web ${slotWebMm}mm is under 1.5× sheet thickness (${Math.round(1.5 * sheetThicknessMm)}mm) — the tab may shear out; move the slot further from the edge.`);
   }
   return notes;
 }

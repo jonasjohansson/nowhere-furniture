@@ -10,8 +10,9 @@ import { CLASSICS } from './designs/classics.js?v=22';
 import { MODULAR } from './designs/modular.js?v=22';
 import { INTERLOCK } from './designs/interlock.js?v=22';
 import { HORSE } from './designs/horse.js?v=22';
+import { CNC_SLOT } from './designs/cnc_slot.js?v=22';
 
-const RAW = [...INTERLOCK, ...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS, ...MODULAR, ...HORSE];
+const RAW = [...INTERLOCK, ...CNC_SLOT, ...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS, ...MODULAR, ...HORSE];
 
 // ----------------------------------------------------------------------------
 // Categories — group the catalog by furniture TYPE so it reads as an organised
@@ -28,6 +29,7 @@ const CATEGORY_BY_ID = {
   'mari-tavolo': 'Tables', 'barrio-communal-table': 'Tables', 'barrio-picnic-trestle': 'Tables',
   'rietveld-crate-lounge': 'Loungers', 'perriand-plank-lounger': 'Loungers', 'barrio-daybed-podium': 'Loungers',
   'modular-box': 'Modular',
+  'cnc-slot-stool': 'Stools', 'cnc-slot-bench': 'Benches', 'cnc-slot-lounge': 'Loungers', 'cnc-slot-oval-rocker': 'Chairs',
 };
 
 for (const d of RAW) d.category = CATEGORY_BY_ID[d.id] || 'Modular';

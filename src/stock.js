@@ -27,8 +27,10 @@
 
 /**
  * @typedef {Object} Joint   A fastening between parts, drives the screw schedule.
- * @property {string}  type    e.g. "torx-butt", "torx-face", "torx-edge"
- * @property {string}  screw   key into SCREWS below
+ * @property {string}  type    e.g. "torx-butt", "torx-face", "torx-edge"; or the
+ *                             screwless slot types "slot-crosslap", "wedge-tenon"
+ *                             (count = engagements / wedges; `screw` omitted).
+ * @property {string} [screw]  key into SCREWS below (omitted for slot types)
  * @property {number}  count   number of screws in this joint
  * @property {string} [note]   e.g. "pre-drill 3mm pilot"
  */
@@ -79,6 +81,24 @@ export const SCREWS = {
   torx6x100: { label: 'Torx 6.0×100', d: 6.0, length: 100, drive: 'T30', pilot: 4.0, boxQty: 50,  boxPrice: 145 },
   torx6x120: { label: 'Torx 6.0×120', d: 6.0, length: 120, drive: 'T30', pilot: 4.0, boxQty: 50,  boxPrice: 170 },
 };
+
+// --- CNC slot-together joinery constants -----------------------------------
+// Press-fit clearance PER SIDE (mm). Ply thickness varies ±0.13mm, so slot
+// width is keyed to MEASURED thickness + 2*fit. Numbers from the research brief.
+export const SLOT_FIT = { snug: 0.10, standard: 0.25, outdoor: 0.35 };
+
+// Inside-corner relief so a square tab seats against a round router bit.
+// dogbone radius should be >= 1.1 * bit radius.
+export const RELIEF = { bitDia: 6.35, kind: 'dogbone' }; // 'dogbone' | 'tbone'
+
+/** slot width to receive a sheet edge of `thicknessMm`, for a fit class. */
+export function slotWidth(thicknessMm, fit = 'standard') {
+  const f = SLOT_FIT[fit] ?? SLOT_FIT.standard;
+  return thicknessMm + 2 * f;
+}
+
+/** dogbone relief radius for the configured bit. */
+export function reliefRadius() { return (RELIEF.bitDia / 2) * 1.1; }
 
 // ----------------------------------------------------------------------------
 // Helpers shared across modules.
