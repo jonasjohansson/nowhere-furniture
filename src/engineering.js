@@ -395,13 +395,23 @@ export function frameBase(opts) {
 // 7. ASSEMBLY + REVIEW helpers — designs may attach human-readable build info.
 // ----------------------------------------------------------------------------
 /** Quick sanity review of a built design; returns warning strings. */
-export function reviewBuild({ parts = [], seatH, seatSpan, seatStock }) {
+export function reviewBuild({ parts = [], seatH, seatSpan, seatStock, sheetSpan, sheetThicknessMm, slotWebMm }) {
   const notes = [];
   if (seatSpan && seatStock && seatSpan > beamMaxSpan(seatStock)) {
     notes.push(`Seat bearer span ${seatSpan}mm exceeds ~${beamMaxSpan(seatStock)}mm advisable for ${seatStock} — add a mid bearer.`);
   }
   if (seatH && (seatH < 300 || seatH > 480)) {
     notes.push(`Seat height ${seatH}mm is outside the comfortable 300-480mm range.`);
+  }
+  // Plywood plate sag: deflection ∝ span⁴ / thickness³. ~750mm is the limit at
+  // 18mm, i.e. span ≈ 41.7 × thickness before a spine/mid-bearer is needed.
+  if (sheetSpan && sheetThicknessMm && sheetSpan > 41.7 * sheetThicknessMm) {
+    notes.push(`Unsupported ${sheetThicknessMm}mm sheet span ${sheetSpan}mm exceeds ~${Math.round(41.7 * sheetThicknessMm)}mm — add a spine or mid-bearer.`);
+  }
+  // Slot web: material between a slot and the panel edge must be ≥ 1.5× sheet
+  // thickness or the tab can shear out.
+  if (slotWebMm && sheetThicknessMm && slotWebMm < 1.5 * sheetThicknessMm) {
+    notes.push(`Slot web ${slotWebMm}mm is under 1.5× sheet thickness (${Math.round(1.5 * sheetThicknessMm)}mm) — the tab may shear out; move the slot further from the edge.`);
   }
   return notes;
 }

@@ -57,6 +57,7 @@ import {
   ERGO,
   profilePanel, trapezoid, rect, wedge, fin, oval,
   crossLapSlot, slotJoint, wedgeTenon,
+  reviewBuild,
   SHEETS,
 } from '../engineering.js?v=22';
 import { slotWidth } from '../stock.js?v=22';
@@ -536,10 +537,10 @@ export const CNC_SLOT = [
 
       // --- Span guardrail ------------------------------------------------
       // An 18mm seat unsupported over a long clear span sags. With no spine the
-      // clear span is the full length between the ends; warn past ~750mm.
+      // clear span is the full length between the ends; the central reviewBuild
+      // guardrail decides the limit (span⁴/thickness³ → ~750mm at 18mm).
       const clearSpan = Math.max(0, seatLen - 2 * footW); // rough clear span between feet (clamped)
-      const SPAN_LIMIT = 750;
-      const overspan = !p.spine && clearSpan > SPAN_LIMIT;
+      const spanWarnings = p.spine ? [] : reviewBuild({ sheetSpan: clearSpan, sheetThicknessMm: thk });
 
       const steps = [
         `CNC-cut from one ${stock} sheet: 2 identical slab ends (foot ${Math.round(footW)}mm, ${Math.round(endH)}mm tall) + 1 seat ${seatLen}×${seatDepth}mm + 1 stretcher ${Math.round(railLen)}×${railH}mm + 2 wedges${p.spine ? ' + 1 mid spine fin' : ''}.`,
@@ -555,9 +556,9 @@ export const CNC_SLOT = [
         'All parts nest from a single 18mm ply sheet with the two ends and two wedges identical, so it cuts and stores flat.',
         'Press-fit benches can loosen with humidity swings; the tusk wedges can simply be re-driven to take up any slack.',
       ];
-      if (overspan) {
+      if (spanWarnings.length) {
         notes.push(
-          `The clear seat span (~${Math.round(clearSpan)}mm) exceeds ~${SPAN_LIMIT}mm: an unsupported 18mm seat will sag. ` +
+          ...spanWarnings,
           'Turn on the mid spine fin (a central bearer/support under the seat) or add an intermediate trestle for this length.'
         );
       }
