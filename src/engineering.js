@@ -246,6 +246,100 @@ export function profilePanel(ref, name, stockKey, profile, pos, group) {
   };
 }
 
+// --- OUTLINE GENERATORS --------------------------------------------------
+// Pure helpers that RETURN just the outline data { pts, arcs } (NOT a full
+// profilePanel). A design passes the result to profilePanel() together with a
+// plane. arcs defaults to [] (a straight-edged polygon). All units mm.
+
+/**
+ * 4-point rectangle, origin-anchored at the bottom-left: corners are
+ * (0,0),(w,0),(w,h),(0,h) walked counter-clockwise. arcs = [].
+ */
+export function rect(w, h) {
+  return { pts: [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }], arcs: [] };
+}
+
+/**
+ * Leg profile: a symmetric trapezoid (or triangle) with a wide base of width w
+ * at y=0 and a top edge narrowed by topInset on EACH side at y=h. Base spans
+ * x in [0,w]; top spans [topInset, w-topInset]. 4 points, arcs = [].
+ */
+export function wedge(w, h, topInset) {
+  return {
+    pts: [
+      { x: 0, y: 0 }, { x: w, y: 0 },
+      { x: w - topInset, y: h }, { x: topInset, y: h },
+    ],
+    arcs: [],
+  };
+}
+
+/**
+ * Symmetric trapezoid centred on x=0: bottom edge of width bottomW at y=0, top
+ * edge of width topW at y=h. 4 points, arcs = [].
+ */
+export function trapezoid(bottomW, topW, h) {
+  const hb = bottomW / 2, ht = topW / 2;
+  return {
+    pts: [
+      { x: -hb, y: 0 }, { x: hb, y: 0 },
+      { x: ht, y: h }, { x: -ht, y: h },
+    ],
+    arcs: [],
+  };
+}
+
+/**
+ * Ellipse-ish outline centred on (0,0), built from the four cardinal points
+ * (±rx,0),(0,±ry) joined by four CIRCULAR arcs (sweep:true, bulging outward).
+ *
+ * APPROXIMATION: sampleArc only draws circular arcs, so for rx!=ry this is not a
+ * true ellipse — each arc uses a representative radius r=max(rx,ry). A single
+ * circular quadrant arc through two cardinal points unavoidably overshoots one
+ * axis (it cannot follow an ellipse), so the bbox only equals 2rx x 2ry for
+ * roughly round ovals; overshoot grows with the rx:ry ratio (negligible up to
+ * ~1.5:1 — the range these designs use — and material past ~3:1). Keep oval()
+ * calls to moderate aspect ratios; for a true ellipse you'd sample it as a
+ * polyline instead. Points run counter-clockwise.
+ */
+export function oval(rx, ry) {
+  const r = Math.max(rx, ry);
+  return {
+    pts: [{ x: rx, y: 0 }, { x: 0, y: ry }, { x: -rx, y: 0 }, { x: 0, y: -ry }],
+    arcs: [
+      { after: 0, r, sweep: true },
+      { after: 1, r, sweep: true },
+      { after: 2, r, sweep: true },
+      { after: 3, r, sweep: true },
+    ],
+  };
+}
+
+/**
+ * Connect an ordered array of ergonomic anchor points into a fin/side outline.
+ * Anchor order convention (any length >= 2; nothing hard-coded to 5):
+ *   front-foot -> seat-front -> seat-back/pivot -> back-top -> rear-foot.
+ * fidelity === 'poly'  -> straight segments: { pts:[...anchorPts], arcs:[] }.
+ * fidelity === 'curve' -> same pts, but a fillet arc is inserted on each
+ *   INTERIOR corner (every anchor except the two endpoints) so the segments
+ *   meeting there round off instead of forming a sharp vertex. Each fillet
+ *   bends the segment leaving the interior point; radius scales with the
+ *   shorter adjacent edge so it never overruns a segment.
+ */
+export function fin(anchorPts, fidelity) {
+  const pts = anchorPts.map((p) => ({ x: p.x, y: p.y }));
+  if (fidelity !== 'curve' || pts.length < 3) return { pts, arcs: [] };
+  const arcs = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], prev = pts[i - 1];
+    const lenIn = Math.hypot(a.x - prev.x, a.y - prev.y);
+    const lenOut = Math.hypot(b.x - a.x, b.y - a.y);
+    const r = Math.max(1, Math.min(lenIn, lenOut) / 2);
+    arcs.push({ after: i, r, sweep: false });
+  }
+  return { pts, arcs };
+}
+
 // ----------------------------------------------------------------------------
 // 6. SUB-ASSEMBLIES — common, well-braced structures in one call.
 // ----------------------------------------------------------------------------
