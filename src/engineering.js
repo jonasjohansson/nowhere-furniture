@@ -4,7 +4,7 @@
 // a set of member factories so designs are sound + consistent, not raw boxes.
 // All metric, millimetres. Members return PartSpec (see stock.js contract).
 // ============================================================================
-import { SHEETS, TIMBER, SCREWS, SCREW_KEYS } from './stock.js?v=22';
+import { SHEETS, TIMBER, SCREWS, SCREW_KEYS, slotWidth } from './stock.js?v=22';
 
 // ----------------------------------------------------------------------------
 // 1. ERGONOMICS — seating geometry presets (mm / degrees). Honest, comfortable.
@@ -74,6 +74,22 @@ export function panelEdgeJoint(panelStockKey, edgeLenMm, spacing = 220, note) {
 // lap / face joint between two panels or panel+thick member.
 export function faceJoint(nearMm, count = 4, note) {
   return { type: 'torx-face', screw: screwForThickness(nearMm), count, note };
+}
+
+// --- screwless joints (CNC slot-together plywood) -------------------------
+/** A cross-lap / tab notch at (x,y) in a profile's local plane. Width keys to
+ *  the MATING sheet thickness + fit clearance; depth is how far the notch cuts
+ *  in (typically half the part depth for a 50% cross-lap). angle in degrees. */
+export function crossLapSlot(x, y, mateThk, depth, fit = 'standard', angle = 0) {
+  return { x, y, w: slotWidth(mateThk, fit), depth, angle };
+}
+/** Screwless cross-lap/tab joint — count = number of slot engagements. */
+export function slotJoint(count, note) {
+  return { type: 'slot-crosslap', count, note };
+}
+/** Tab-through-mortise locked by a driven wedge. count = number of wedges. */
+export function wedgeTenon(tabThk, len, count, note) {
+  return { type: 'wedge-tenon', count, note };
 }
 
 // ----------------------------------------------------------------------------
