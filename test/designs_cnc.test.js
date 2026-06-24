@@ -40,6 +40,103 @@ export function assertDesignInvariants(d) {
   }
 }
 
+// --- Reusable WORLD-SPACE transforms (replicate the builder's conventions) ---
+// The builder centres a profile's BOUNDING BOX on the part's `pos`, then maps the
+// local 2-D plane onto world axes. For 'xy'/'zy' the profile's local-y is the
+// world VERTICAL; for 'xz' the profile lies flat and the only vertical extent is
+// the sheet thickness centred on pos.y. These helpers let every design assert,
+// in WORLD coordinates, that parts are grounded and actually connect.
+
+const sheetThk = (part) => (SHEETS[part.stock] ? SHEETS[part.stock].thickness : 18);
+
+// World-Y bbox bounds of a part [low, high], ground plane at world y=0.
+export function partYRange(part) {
+  if (!part.profile) {
+    // Box parts: size.h is the vertical extent, centred on pos.y.
+    return [part.pos.y - part.size.h / 2, part.pos.y + part.size.h / 2];
+  }
+  const plane = part.profile.plane;
+  if (plane === 'xz') {
+    // Lies flat: vertical extent is just the sheet thickness centred on pos.y.
+    const t = sheetThk(part);
+    return [part.pos.y - t / 2, part.pos.y + t / 2];
+  }
+  // 'xy'/'zy': local-y maps to world-y; bbox is centred on pos.y.
+  const bb = profileBBox(part.profile);
+  return [part.pos.y - bb.h / 2, part.pos.y + bb.h / 2];
+}
+
+// World point of a slot centre on a part, generalising the oval-rocker helper:
+// the builder centres the profile bbox on pos, so a slot's local (x,y) is an
+// offset from the bbox centre, mapped onto the plane's world axes.
+export function slotWorld(part, s) {
+  const bb = profileBBox(part.profile);
+  const xs = part.profile.pts.map(p => p.x), ys = part.profile.pts.map(p => p.y);
+  const cx = Math.min(...xs) + bb.w / 2;   // matches profileBBox-derived centre for pts-bounded outlines
+  const cy = Math.min(...ys) + bb.h / 2;
+  const dx = s.x - cx, dy = s.y - cy;      // offset from bbox centre, in local axes
+  const plane = part.profile.plane;
+  if (plane === 'zy') return { x: part.pos.x, y: part.pos.y + dy, z: part.pos.z + dx };
+  if (plane === 'xz') return { x: part.pos.x + dx, y: part.pos.y, z: part.pos.z + dy };
+  return { x: part.pos.x + dx, y: part.pos.y + dy, z: part.pos.z }; // 'xy'
+}
+
+// Whether two world-Y intervals overlap (or touch within tol).
+const yOverlap = ([aLo, aHi], [bLo, bHi], tol = 1e-6) =>
+  aLo <= bHi + tol && bLo <= aHi + tol;
+
+// Grounded + connection checks shared by all four designs.
+function assertGroundedAndConnected(d, { groundTol = 2, floorTol = 60 } = {}) {
+  const params = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(params);
+  const ranges = out.parts.map(p => ({ part: p, y: partYRange(p) }));
+
+  // 1) GROUNDED: the lowest foot of the whole design sits ~y=0 — nothing sunk
+  //    below the ground plane, nothing floating far above it.
+  const lowest = Math.min(...ranges.map(r => r.y[0]));
+  assert.ok(lowest >= -groundTol,
+    `${d.id}: lowest part foot ${lowest.toFixed(1)}mm is sunk below the ground (y=0)`);
+  assert.ok(lowest <= floorTol,
+    `${d.id}: lowest part foot ${lowest.toFixed(1)}mm floats above the ground (y=0)`);
+
+  // 2) CONNECTION: the seat/top part must be carried by vertical legs/fins —
+  //    each ground-standing vertical part's world-Y range must reach the seat's.
+  const seat = out.parts.find(p => p.profile && p.profile.plane === 'xz'
+    && /seat|top/i.test(p.ref));
+  assert.ok(seat, `${d.id}: has a lie-flat seat/top part`);
+  const seatY = partYRange(seat);
+  const verticals = ranges.filter(r => r.part.profile
+    && (r.part.profile.plane === 'xy' || r.part.profile.plane === 'zy')
+    && r.y[0] <= groundTol);                 // ground-standing (foot ~0)
+  assert.ok(verticals.length > 0, `${d.id}: has ground-standing vertical parts`);
+  for (const v of verticals) {
+    assert.ok(yOverlap(v.y, seatY),
+      `${d.id}: vertical part ${v.part.ref} world-Y [${v.y[0].toFixed(1)},${v.y[1].toFixed(1)}] ` +
+      `does not reach the seat [${seatY[0].toFixed(1)},${seatY[1].toFixed(1)}] (floating gap)`);
+  }
+}
+
+test('grounded + connected: stool/bench/lounge feet on y=0, seat meets legs', () => {
+  assertGroundedAndConnected(byId('cnc-slot-stool'));
+  assertGroundedAndConnected(byId('cnc-slot-bench'));
+  assertGroundedAndConnected(byId('cnc-slot-lounge'));
+});
+
+test('grounded: oval rocker rests its rocker arc ~on y=0', () => {
+  // The rocker is curved — the FLOOR CONTACT is the two standing SIDE ovals,
+  // whose lower arc is the rocker rail. (The lying brace oval is a cross-member,
+  // not floor contact, so it is excluded.) Allow a slightly wider tolerance for
+  // the curve dipping just below/above the floor line.
+  const d = byId('cnc-slot-oval-rocker');
+  const params = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(params);
+  const sides = out.parts.filter(p => p.group === 'Sides');
+  assert.ok(sides.length === 2, 'two standing side ovals');
+  const lowest = Math.min(...sides.map(p => partYRange(p)[0]));
+  assert.ok(Math.abs(lowest) <= 60,
+    `oval rocker side-arc contact ${lowest.toFixed(1)}mm should sit ≈ y=0 (rocker curve)`);
+});
+
 test('slot-in stool: registered + invariants + has slots', () => {
   const d = byId('cnc-slot-stool');
   assertDesignInvariants(d);

@@ -55,7 +55,7 @@
 
 import {
   ERGO,
-  profilePanel, trapezoid, rect, wedge, fin, oval,
+  profilePanel, profileBBox, trapezoid, rect, wedge, fin, oval,
   crossLapSlot, slotJoint, wedgeTenon,
   reviewBuild,
   SHEETS,
@@ -165,6 +165,13 @@ export const CNC_SLOT = [
 
       const parts = [];
 
+      // GROUNDING: the builder centres the profile's BBOX on pos, so a fin whose
+      // outline foot is at local y=0 must be placed at pos.y = bbox.h/2 to land the
+      // foot on the floor (world y=0) and the top at world y = bbox.h. With foot at
+      // local 0 the bbox centre is at h/2, so this makes local-y == world-y: the fin
+      // body top (finBodyH) lands at the seat underside and the tenon projects above.
+      const finBBoxH = profileBBox(finOutline()).h;     // = finBodyH + tabLen
+      const finCentreY = finBBoxH / 2;
       // NOTE: both fins share the centre origin (x=z=0) ON PURPOSE — they occupy
       // the same crossing volume and the apparent overlap is RESOLVED by their
       // complementary half-lap notches (fin A notched from the top, fin B from
@@ -172,16 +179,14 @@ export const CNC_SLOT = [
       // the joint.
       //
       // Fin A: plane 'zy' (flat faces ±x, body runs along z), notched from top.
-      // profilePanel anchors the profile in its plane; the trapezoid foot is at
-      // local y=0, so each fin already stands on the ground (foot at y=0).
       const finA = profilePanel('FIN-A', 'Fin', stock,
         { plane: 'zy', ...finOutline(), slots: [slotFromTop] },
-        { x: 0, y: 0, z: 0 }, 'Fins');
+        { x: 0, y: finCentreY, z: 0 }, 'Fins');
 
       // Fin B: plane 'xy' (flat faces ±z, body runs along x), notched from bottom.
       const finB = profilePanel('FIN-B', 'Fin', stock,
         { plane: 'xy', ...finOutline(), slots: [slotFromBottom] },
-        { x: 0, y: 0, z: 0 }, 'Fins');
+        { x: 0, y: finCentreY, z: 0 }, 'Fins');
 
       // Seat top.
       const top = profilePanel('TOP', 'Seat', stock,
@@ -314,16 +319,22 @@ export const CNC_SLOT = [
       const halfW = p.width / 2;
       const parts = [];
 
+      // GROUNDING: the builder centres the profile's BBOX on pos. The fin outline's
+      // feet are at local y=0, so placing the fin at pos.y = bbox.h/2 lands the feet
+      // on the floor (world y=0) and makes local-y == world-y. Then the seat housing
+      // (local y=seatH) lands at world seatH and the back housing (local y=backMidY)
+      // at world backMidY — exactly where the seat and back panels sit.
+      const finCentreY = profileBBox(finOutline).h / 2;
       // Two identical side fins, plane 'xy' so the flat face is vertical and the
       // silhouette (local-x = depth runs along world-x, local-y = height up) is the
       // side profile. They stand facing each other at z = ±width/2. Same outline →
       // identical bbox (the test asserts this).
       const finL = profilePanel('FIN-L', 'Side fin', stock,
         { plane: 'xy', ...finOutline, slots: finSlots },
-        { x: 0, y: 0, z: -halfW }, 'Sides');
+        { x: 0, y: finCentreY, z: -halfW }, 'Sides');
       const finR = profilePanel('FIN-R', 'Side fin', stock,
         { plane: 'xy', ...finOutline, slots: finSlots },
-        { x: 0, y: 0, z:  halfW }, 'Sides');
+        { x: 0, y: finCentreY, z:  halfW }, 'Sides');
 
       // Seat panel: flat-ish board running in depth (world-x) and width (world-z).
       // plane 'xz' lies flat (thickness up); its profile-x is the seat length and
@@ -482,14 +493,20 @@ export const CNC_SLOT = [
 
       const parts = [];
 
+      // GROUNDING: the builder centres the profile's BBOX on pos. The trapezoid
+      // foot is at local y=0, so placing each end at pos.y = bbox.h/2 lands the foot
+      // on the floor (world y=0) and makes local-y == world-y: the top edge (endH)
+      // lands at the seat underside and the seat housing/tusk slot land at their
+      // authored world heights (endH and stretcherY).
+      const endCentreY = profileBBox(endOutline()).h / 2; // = endH/2
       // Two identical end slabs, plane 'zy' (flat faces ±x, body runs in z & y).
-      // Foot at local y=0 → stands on the ground. At x = ±len/2.
+      // At x = ±len/2.
       const endL = profilePanel('END-L', 'Slab end', stock,
         { plane: 'zy', ...endOutline(), slots: endSlots },
-        { x: -seatLen / 2, y: 0, z: 0 }, 'Ends');
+        { x: -seatLen / 2, y: endCentreY, z: 0 }, 'Ends');
       const endR = profilePanel('END-R', 'Slab end', stock,
         { plane: 'zy', ...endOutline(), slots: endSlots },
-        { x: seatLen / 2, y: 0, z: 0 }, 'Ends');
+        { x: seatLen / 2, y: endCentreY, z: 0 }, 'Ends');
 
       // Seat, flat at the seat height (top at seatTop).
       const seat = profilePanel('SEAT', 'Seat', stock,
@@ -521,9 +538,12 @@ export const CNC_SLOT = [
         const spineH = endH;
         const spineOutline = () => trapezoid(endTopW, endTopW * 0.7, spineH);
         const spineSeatHousing = crossLapSlot(0, spineH, thk, thk, FIT, 0);
+        // Grounded like the ends: foot at local y=0 → pos.y = bbox.h/2 so the foot
+        // lands on the floor and the top edge (spineH) reaches the seat underside.
+        const spineCentreY = profileBBox(spineOutline()).h / 2;
         spine = profilePanel('SPINE', 'Spine fin', stock,
           { plane: 'zy', ...spineOutline(), slots: [spineSeatHousing] },
-          { x: 0, y: 0, z: 0 }, 'Spine');
+          { x: 0, y: spineCentreY, z: 0 }, 'Spine');
         parts.push(spine);
       }
 
