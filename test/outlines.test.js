@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rect, wedge, oval, fin, profileBBox } from '../src/engineering.js?v=22';
+import { rect, wedge, oval, fin, profileBBox } from '../src/engineering.js?v=23';
 
 test('rect is 4 points of the given size', () => {
   const r = rect(100, 60);

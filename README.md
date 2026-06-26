@@ -4,7 +4,9 @@ A browser tool for designing and costing **burner-friendly outdoor furniture** f
 a festival barrio (built for Nowhere). Two materials only — **plywood sheet** +
 **reglar timber** — fastened with **Torx wood screws**. Pick a design from the
 catalog, tune its parametrics, read off the full metric **bill of materials**, and
-export cut sheets + shop drawings.
+export cut sheets + shop drawings. Or flip to **Vignette mode** and let the Shuffle
+arrange the slot-together family into a functional hangout scene with one combined
+build sheet.
 
 Inspired by the honest-plank lineage: **Enzo Mari's Autoprogettazione**, Rietveld's
 crate furniture, Donald Judd's plywood volumes, Prouvé, Perriand, Van Bo.
@@ -19,9 +21,14 @@ Static site, no build step. Visit it on the local server:
 
 ## What it does
 
-- **Catalog** of 12 parametric designs across benches, Mari pieces, lounges,
-  stools and a communal table — each with engineered joinery, assembly steps,
-  and a difficulty/build-time badge
+- **Catalog** of 24 parametric designs across benches, Mari pieces, lounges,
+  stools, communal tables and a CNC **slot-together** family (now 5 designs:
+  stool, lounge chair, bench, oval rocker, table) — each with engineered joinery,
+  assembly steps, and a difficulty/build-time badge
+- **Vignette / Shuffle mode** — a deterministic Shuffle arranges the slot-together
+  family into fun, functional hangout scenes, then rolls up a **combined BOM** and a
+  **profile-aware cut sheet** for the whole set. Every scene is reproducible and
+  shareable via `#v=<seed>` permalinks
 - **3D builder** — orbit, select, move/rotate gizmo, grid-snap, live dimensions,
   **undo/redo** (⌘Z / ⌘⇧Z), procedural warm-wood materials + soft shadows
 - **Live BOM** — plywood sheets (2D-nested), reglar (cut-optimised into stock lengths),
@@ -42,7 +49,11 @@ Modular ES modules against one pinned data contract (`PartSpec` / `Joint` / `Des
 | `src/bom.js` | `computeBOM()` — sheet nesting + timber cut-optimisation + screw schedule |
 | `src/builder.js` | `Builder` class — Three.js scene, gizmo, selection, dimensions, undo/redo, wood graphics |
 | `src/export.js` | CSV / print-HTML / cut-sheet SVG / elevations SVG / project JSON |
-| `src/app.js` | Integration shell — wires catalog → builder → BOM → export |
+| `src/rng.js` | Tiny deterministic seeded PRNG — the basis of reproducible Shuffles |
+| `src/sample_params.js` | Seeded sampling of each design's parametrics within engineered bounds |
+| `src/vignette_templates.js` | Scene templates — which slot-together pieces go where in a hangout |
+| `src/vignette.js` | Builds a vignette from a seed: places the family, rolls up a combined BOM + cut sheet |
+| `src/app.js` | Integration shell — wires catalog → builder → BOM → export, plus the Design ↔ Vignette mode toggle |
 
 All dimensions are **metric, authored in millimetres**. The 3D scene works in metres
 internally; everything else stays in mm. Prices are rough SEK builder's-merchant
@@ -70,7 +81,9 @@ estimates for ballparking, not quotes.
 
 ## Roadmap
 
-- Real wedge / tab / lap **joinery geometry** (parts are textured boxes today)
+- ✅ A CNC **slot-together family** (stool, lounge chair, bench, oval rocker, table)
+- ✅ **Vignette / Shuffle** arrangements — reproducible hangout scenes with a combined
+  BOM + cut sheet, shareable via `#v=<seed>` permalinks
 - **DXF** export of panel outlines straight to the CNC
 - Screw-position markers + assembly-step playback in 3D
 - Per-design wind/anchoring detail (Nowhere gusts)

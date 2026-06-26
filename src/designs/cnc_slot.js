@@ -59,8 +59,8 @@ import {
   crossLapSlot, slotJoint, wedgeTenon,
   reviewBuild,
   SHEETS,
-} from '../engineering.js?v=22';
-import { slotWidth } from '../stock.js?v=22';
+} from '../engineering.js?v=23';
+import { slotWidth } from '../stock.js?v=23';
 
 const PLY = (key) => SHEETS[key].thickness;   // sheet thickness in mm
 
@@ -735,6 +735,184 @@ export const CNC_SLOT = [
         'It ROCKS: the two standing ovals sit on their lower arcs, which act as the rocker rails. Keep the oval roughly round so it rocks evenly and the cut bbox stays true.',
         'Press-fit rockers can loosen with humidity swings; a dab of PVA in the slots makes it permanent if you do not need to flat-pack it again.',
       ];
+
+      return { parts, joints, steps, notes };
+    },
+  },
+
+  // --------------------------------------------------------------------------
+  // SLAB TRESTLE TABLE — Nowhere CNC Crew, 2026.
+  // The bench, grown to table height. Two identical slab ENDS stand vertical at
+  // each end; a flat TOP spans the length and drops THROUGH a housing in each
+  // end. Lower down, a STRETCHER ties the two feet: its tabs project through a
+  // slot in each end and a flat WEDGE is driven through each projecting tab — a
+  // demountable tusk (wedged through-tenon). Two ends + top + stretcher + 2
+  // wedges = five sheet shapes, no screws, knock-down. Rounds out the family so
+  // a generator can lay up "table + stools" arrangements.
+  // --------------------------------------------------------------------------
+  {
+    id: 'cnc-slot-table',
+    name: 'Slab Trestle Table',
+    designer: 'Nowhere CNC Crew',
+    year: 2026,
+    blurb: 'A screwless CNC table: two identical slab ends carry a flat top ' +
+      'through a housing in each end, and a stretcher is locked low down by ' +
+      'driven tusk wedges. Knock-down, flat-pack, cut from one ply sheet.',
+    difficulty: 'Medium',
+    buildTime: '60–90 min',
+    params: [
+      { key: 'len',   label: 'Table length',                       min: 900, max: 2200, step: 10, default: 1400, unit: 'mm' },
+      { key: 'depth', label: 'Table depth',                        min: 600, max: 1000, step: 10, default: 800,  unit: 'mm' },
+      { key: 'topH',  label: 'Top height',                         min: 650, max: 760,  step: 5,  default: ERGO.table.topH, unit: 'mm' },
+      { key: 'fit',   label: 'Fit class (0 snug,1 std,2 outdoor)', min: 0, max: 2, step: 1, default: 1, unit: '' },
+    ],
+
+    build(p) {
+      const FIT = ['snug', 'standard', 'outdoor'][p.fit] ?? 'standard';
+      const stock = 'ply18';
+      const thk = PLY(stock);                       // 18mm — the mating thickness
+
+      const topTop = p.topH;
+      const topLen = p.len;
+      const topDepth = p.depth;
+
+      // --- Slab END geometry ---------------------------------------------
+      // Each end is a vertical trapezoidal slab: a wide foot tapering up to a
+      // narrower top edge that the top sits across. Authored in the part's
+      // LOCAL plane where local-x = table depth (world z) and local-y = height.
+      // trapezoid() is centred on x=0, anchored at y=0 (foot on the ground), so
+      // the slab already stands on the ground. Same outline for both ends →
+      // identical bbox.
+      const footW = Math.min(topDepth * 0.7, 520);         // generous foot for stability
+      const endTopW = Math.min(topDepth * 0.85, footW);    // top edge ≤ foot, ≤ table depth
+      const endH = topTop - thk;                           // top edge at the top's underside
+      const endOutline = () => trapezoid(footW, endTopW, endH);
+
+      // Through-housing for the top: the top passes through the slab top edge.
+      // Notch centred on the slab centreline (local x=0), at the top edge, cut
+      // `thk` deep (the top thickness) so top and slab mesh flush. (Through-
+      // housing, like the bench — not a 50% half-lap.)
+      const topHousing = crossLapSlot(0, endH, thk, thk, FIT, 0);
+
+      // Tusk slot for the stretcher: lower down, on the centreline, a THROUGH
+      // slot the stretcher's tab passes through (cut = stretcher thickness).
+      const stretcherY = Math.max(thk * 4, endH * 0.25);   // low rail, clear of the ground
+      const tuskSlot = crossLapSlot(0, stretcherY, thk, thk, FIT, 90);
+
+      const endSlots = [topHousing, tuskSlot];
+
+      // --- Top panel -----------------------------------------------------
+      // Flat rect in plane 'xz' (lies flat, thickness up). Local-x = table
+      // length, local-y = table depth. Spans the full length; carries a mating
+      // through-mortise over each end so it seats into the slab housings.
+      const topProfile = rect(topLen, topDepth);
+      // Ends stand at x = ±len/2; their slabs run in z, so the top meets each
+      // end near its x-ends. Mortise centred in depth, one inset from each end.
+      const mortiseInset = thk;
+      const topSlots = [
+        crossLapSlot(mortiseInset, topDepth / 2, thk, thk, FIT, 90),
+        crossLapSlot(topLen - mortiseInset, topDepth / 2, thk, thk, FIT, 90),
+      ];
+
+      // --- Stretcher (rail) with projecting tusk tabs --------------------
+      // An upright board running the table length, plane 'xy' (faces ±z). Local-x
+      // = length (world x), local-y = height. It is long enough to PROJECT a tab
+      // beyond each end slab; each tab carries a slot the flat wedge drives
+      // through, drawing the ends tight. Rail height is a fixed structural depth.
+      const railH = 120;                             // structural depth of the rail
+      const tabLen = 80;                             // tab projecting beyond each slab
+      const wedgeW = 30;                             // wedge slot/part width
+      const railLen = topLen + 2 * tabLen;
+      const stretcherProfile = rect(railLen, railH);
+      const slabFaceL = tabLen;                      // inner face of the left tab region
+      const slabFaceR = railLen - tabLen;
+      const wedgeMortL = slabFaceL - tabLen / 2;     // wedge sits mid-tab, outside the slab
+      const wedgeMortR = slabFaceR + tabLen / 2;
+      const stretcherSlots = [
+        crossLapSlot(wedgeMortL, railH / 2, thk, wedgeW, FIT, 90),
+        crossLapSlot(wedgeMortR, railH / 2, thk, wedgeW, FIT, 90),
+      ];
+
+      // --- Wedges --------------------------------------------------------
+      // Two flat tapered wedges (their own profile parts), driven down through
+      // the tab mortises to lock the stretcher. A simple wedge() outline: wide
+      // base tapering to a narrow tip. Plane 'xy' (a thin flat key).
+      const wedgeBaseW = wedgeW;
+      const wedgeTipInset = wedgeBaseW * 0.3;        // taper per side
+      const wedgeH = railH * 0.9;
+      const wedgeOutline = () => wedge(wedgeBaseW, wedgeH, wedgeTipInset);
+
+      const parts = [];
+
+      // GROUNDING: the builder centres the profile's BBOX on pos. The trapezoid
+      // foot is at local y=0, so placing each end at pos.y = bbox.h/2 lands the foot
+      // on the floor (world y=0) and makes local-y == world-y: the top edge (endH)
+      // lands at the top's underside and the top housing/tusk slot land at their
+      // authored world heights (endH and stretcherY).
+      const endCentreY = profileBBox(endOutline()).h / 2; // = endH/2
+      // Two identical end slabs, plane 'zy' (flat faces ±x, body runs in z & y).
+      // At x = ±len/2.
+      const endL = profilePanel('END-L', 'Slab end', stock,
+        { plane: 'zy', ...endOutline(), slots: endSlots },
+        { x: -topLen / 2, y: endCentreY, z: 0 }, 'Ends');
+      const endR = profilePanel('END-R', 'Slab end', stock,
+        { plane: 'zy', ...endOutline(), slots: endSlots },
+        { x: topLen / 2, y: endCentreY, z: 0 }, 'Ends');
+
+      // Top, flat at table height (top surface at topTop).
+      const top = profilePanel('TOP', 'Top', stock,
+        { plane: 'xz', ...topProfile, slots: topSlots },
+        { x: 0, y: topTop - thk / 2, z: 0 }, 'Top');
+
+      // Stretcher, upright low rail tying the two ends; centred on x=0.
+      const stretcher = profilePanel('STRETCHER', 'Stretcher', stock,
+        { plane: 'xy', ...stretcherProfile, slots: stretcherSlots },
+        { x: 0, y: stretcherY, z: 0 }, 'Stretcher');
+
+      parts.push(endL, endR, top, stretcher);
+
+      // Two driven wedges, one per projecting tab, plane 'xy'. Placed outside each
+      // slab face, at the rail height.
+      const wedgeL = profilePanel('WEDGE-1', 'Wedge', stock,
+        { plane: 'xy', ...wedgeOutline(), slots: [] },
+        { x: -topLen / 2 - tabLen / 2, y: stretcherY, z: 0 }, 'Wedges');
+      const wedgeR = profilePanel('WEDGE-2', 'Wedge', stock,
+        { plane: 'xy', ...wedgeOutline(), slots: [] },
+        { x: topLen / 2 + tabLen / 2, y: stretcherY, z: 0 }, 'Wedges');
+      parts.push(wedgeL, wedgeR);
+
+      const joints = [
+        slotJoint(2, 'top board passes through a through-housing in each slab end (2 engagements)'),
+        wedgeTenon(thk, tabLen, 2, 'stretcher tabs project through each slab end and are locked by a driven tusk wedge (2 wedges)'),
+      ];
+
+      // --- Span guardrail ------------------------------------------------
+      // An 18mm top unsupported over a long clear span sags. The clear span is the
+      // length between the ends; the central reviewBuild guardrail decides the
+      // limit (span⁴/thickness³). The trestle ends carry the top near each end.
+      const clearSpan = Math.max(0, topLen - 2 * footW);
+      const spanWarnings = reviewBuild({ sheetSpan: clearSpan, sheetThicknessMm: thk });
+
+      const steps = [
+        `CNC-cut from one ${stock} sheet: 2 identical slab ends (foot ${Math.round(footW)}mm, ${Math.round(endH)}mm tall) + 1 top ${topLen}×${topDepth}mm + 1 stretcher ${Math.round(railLen)}×${railH}mm + 2 wedges.`,
+        `All slots are cut for a ${FIT} fit (${topHousing.w.toFixed(2)}mm wide for ${thk}mm ply). Clear any dogbone reliefs before assembly.`,
+        'Stand the two slab ends upright, housing side up, the table length apart.',
+        `Drop the top into the housing in each end (top surface at ${Math.round(topTop)}mm) so it meshes flush with both slabs.`,
+        'Pass the stretcher through the low slot in each end so a tab projects beyond each slab face.',
+        'Drive a wedge down through each projecting tab to draw the ends tight against the top. Tap home with a mallet; the wedges are demountable for flat-pack.',
+        'Check the table sits flat and rocks on no end; ease all edges. For outdoor use pick the outdoor fit and oil the ply.',
+      ];
+      const notes = [
+        'Knock-down: the top housings locate the slabs and the two tusk wedges lock the stretcher, squaring the frame. No glue, no screws — drive the wedges out to flat-pack.',
+        'All parts nest from a single 18mm ply sheet with the two ends and two wedges identical, so it cuts and stores flat.',
+        'Press-fit tables can loosen with humidity swings; the tusk wedges can simply be re-driven to take up any slack.',
+      ];
+      if (spanWarnings.length) {
+        notes.push(
+          ...spanWarnings,
+          'Add an intermediate trestle or a thicker top for this length to keep the unsupported span from sagging.'
+        );
+      }
 
       return { parts, joints, steps, notes };
     },

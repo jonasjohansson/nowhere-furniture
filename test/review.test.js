@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewBuild } from '../src/engineering.js?v=22';
+import { reviewBuild } from '../src/engineering.js?v=23';
 
 test('flags an over-long unsupported 18mm sheet span', () => {
   const w = reviewBuild({ sheetSpan: 900, sheetThicknessMm: 18 });

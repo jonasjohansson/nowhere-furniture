@@ -60,6 +60,11 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .btn-grid button { width: 100%; }
 
+/* mode toggle — two flat segments, terracotta active */
+.mode-toggle { display: flex; gap: 4px; }
+.mode-toggle button { flex: 1; }
+.mode-toggle button.active { color: var(--accent); border-color: var(--accent); }
+
 /* catalog — grouped by type, borderless rows, terracotta active */
 #catalog-list { display: flex; flex-direction: column; }
 .cat-group { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; font-weight: 500;

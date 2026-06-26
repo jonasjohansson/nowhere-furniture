@@ -1,16 +1,18 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=22';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=22';
-import { computeBOM, bomSummaryLine } from './bom.js?v=22';
-import { SHEETS, TIMBER } from './stock.js?v=22';
-import { MATERIALS } from './materials.js?v=22';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=22';
+import { Builder } from './builder.js?v=23';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=23';
+import { computeBOM, bomSummaryLine } from './bom.js?v=23';
+import { SHEETS, TIMBER } from './stock.js?v=23';
+import { MATERIALS } from './materials.js?v=23';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=23';
 import {
   buildFullDocHTML,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=22';
+} from './export.js?v=23';
+import { generateVignette, composeVignette } from './vignette.js?v=23';
+import { seedFrom } from './rng.js?v=23';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,6 +25,8 @@ let currentParams = {};
 let currentJoints = [];   // joints from the active design template (drive screws)
 let currentBuild = null;  // last {parts, joints, steps, notes} from build()
 let lastParts = [];
+let mode = 'design';      // 'design' | 'vignette'
+let currentVignette = null; // last {seed, templateId, palette, pieces} shown
 
 // ---------------------------------------------------------------------------
 // catalog list
@@ -136,7 +140,10 @@ builder.on('change', (parts) => {
   lastParts = parts;
   recomputeBOM();
 });
-builder.on('select', (spec) => renderInspector(spec));
+builder.on('select', (spec) => {
+  if (mode === 'vignette') return; // generated scenes are read-only — no per-part edits
+  renderInspector(spec);
+});
 
 // ---------------------------------------------------------------------------
 // BOM panel
@@ -346,6 +353,54 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// vignette mode — deterministic seating clusters from a seed
+// ---------------------------------------------------------------------------
+function seedStr(seed) { return (seed >>> 0).toString(36); }
+
+// Render a vignette + recompute its combined BOM. Reuses the existing pipeline:
+// loadParts emits 'change' -> recomputeBOM runs over the composed parts/joints.
+function showVignette(seed) {
+  const v = generateVignette(seed >>> 0);
+  currentVignette = v;
+  const { parts, joints } = composeVignette(v);
+  currentJoints = joints;       // set BEFORE loadParts so BOM uses them
+  builder.loadParts(parts);     // emits 'change' -> recomputeBOM
+  location.hash = 'v=' + seedStr(seed);
+}
+
+function shuffleVignette() {
+  const seed = (Math.random() * 2 ** 32) >>> 0; // sole Math.random — a UI action; pipeline stays deterministic
+  showVignette(seed);
+}
+
+// Switch between Design and Vignette. Design restores the active catalog design;
+// Vignette shows the current scene (or rolls a fresh seed on first entry).
+function setAppMode(next) {
+  if (next === mode) return;
+  mode = next;
+  for (const b of document.querySelectorAll('#mode-toggle button'))
+    b.classList.toggle('active', b.dataset.mode === mode);
+  const isVig = mode === 'vignette';
+  $('catalog-section').hidden = isVig;
+  $('vignette-section').hidden = !isVig;
+  $('design-section').hidden = isVig;     // hide design head/params/material in vignette mode
+  $('inspect-section').hidden = isVig;    // generated scenes are read-only
+  builder.select(null);
+  if (isVig) {
+    if (currentVignette) showVignette(currentVignette.seed);
+    else shuffleVignette();
+  } else {
+    selectDesign(currentDesign?.id || 'board-stool');
+  }
+}
+
+$('mode-toggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-mode]'); if (!btn) return;
+  setAppMode(btn.dataset.mode);
+});
+$('shuffle-btn').addEventListener('click', shuffleVignette);
+
+// ---------------------------------------------------------------------------
 // export
 // ---------------------------------------------------------------------------
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -370,7 +425,14 @@ $('right').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-exp]'); if (!btn) return;
   const bom = currentBOM();
   switch (btn.dataset.exp) {
-    case 'pdf':  printHTML(buildFullDocHTML(bom, { ...exportMeta(), name: currentDesign?.name, steps: currentBuild?.steps, notes: currentBuild?.notes })); break;
+    case 'pdf': {
+      const meta = mode === 'vignette'
+        ? { ...exportMeta(), projectName: 'Vignette ' + seedStr(currentVignette?.seed ?? 0),
+            name: 'Vignette ' + seedStr(currentVignette?.seed ?? 0) }
+        : { ...exportMeta(), name: currentDesign?.name, steps: currentBuild?.steps, notes: currentBuild?.notes };
+      printHTML(buildFullDocHTML(bom, meta));
+      break;
+    }
     case 'save': exportProjectJSON({ design: currentDesign?.id, params: currentParams, parts: lastParts }, 'nowhere-project.json'); break;
     case 'load': $('file-input').click(); break;
   }
@@ -412,7 +474,23 @@ function toast(msg) {
 buildStockSelect();
 buildMaterialSelect();
 renderCatalog();
-selectDesign('board-stool'); // the featured design, pinned to the top of the catalog
+
+// Permalink: #v=<base36 seed> boots straight into a reproduced vignette;
+// otherwise fall back to the featured design.
+const vigMatch = /^#?v=(.+)$/.exec(location.hash);
+if (vigMatch) {
+  mode = 'vignette';
+  for (const b of document.querySelectorAll('#mode-toggle button'))
+    b.classList.toggle('active', b.dataset.mode === 'vignette');
+  $('catalog-section').hidden = true;
+  $('vignette-section').hidden = false;
+  $('design-section').hidden = true;
+  $('inspect-section').hidden = true;
+  const seed = seedFrom(parseInt(vigMatch[1], 36));
+  showVignette(seed);
+} else {
+  selectDesign('board-stool'); // the featured design, pinned to the top of the catalog
+}
 
 // --- language (English / Catalan) ------------------------------------------
 function refreshLang() {

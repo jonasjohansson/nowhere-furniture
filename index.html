@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Spline+Sans:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=22" />
+<link rel="stylesheet" href="styles.css?v=23" />
 <script type="importmap">
 {
   "imports": {
@@ -23,8 +23,19 @@
   <!-- LEFT: catalog ---------------------------------------------------------->
   <aside id="left">
     <div class="section">
+      <div id="mode-toggle" class="mode-toggle">
+        <button data-mode="design" class="active">Design</button>
+        <button data-mode="vignette">Vignette</button>
+      </div>
+    </div>
+    <div class="section" id="catalog-section">
       <h2 data-i18n="catalog">Catalog</h2>
       <div id="catalog-list"></div>
+    </div>
+    <div class="section" id="vignette-section" hidden>
+      <h2>Vignette</h2>
+      <div class="muted small" style="margin-bottom:8px">A deterministic seating cluster. Shuffle for a new seed; the URL captures the scene.</div>
+      <button id="shuffle-btn" style="width:100%">⇄ Shuffle</button>
     </div>
   </aside>
 
@@ -104,6 +115,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="src/app.js?v=22"></script>
+<script type="module" src="src/app.js?v=23"></script>
 </body>
 </html>
