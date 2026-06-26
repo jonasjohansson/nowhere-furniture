@@ -76,7 +76,12 @@ function pickTemplate(rng) {
 /** Build a cohesive analogous palette from the rng: a base hue plus a symmetric
  *  fan of related hues, all wrapped into [0,360). */
 function buildPalette(rng) {
-  const base = rng() * 360;
+  // Warm-desert bias: keep the base hue in an earthy amber→terracotta→ochre band
+  // (~15–45°) rather than the full wheel, so a tinted scene always reads as warm
+  // stained wood on the sand ground. (Full-wheel hues gave blue/purple furniture
+  // that looked wrong on the desert.) The analogous fan below still gives
+  // per-scene variety within the warm range.
+  const base = 15 + rng() * 30; // [15, 45) degrees — warm woods
   // Symmetric analogous fan in 12-degree steps: -24,-12,0,+12,+24 around base.
   const spreads = [-2, -1, 0, 1, 2].map((i) => i * 12);
   const hues = spreads.map((d) => wrapDeg(base + d));
