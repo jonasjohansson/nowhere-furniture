@@ -5,7 +5,8 @@
 // Everything here is PURE: the only randomness is the caller-seeded rng (a
 // mulberry32 function) — no Date, no Math.random.
 // ============================================================================
-import { fin } from './engineering.js?v=23';
+import { fin, profileBBox, beamMaxSpan } from './engineering.js?v=23';
+import { RELIEF, SHEETS } from './stock.js?v=23';
 
 /** Clamp v into [lo, hi]. */
 function clamp(v, lo, hi) {
@@ -103,4 +104,230 @@ export function varyFin(spec, rng) {
   // means the bbox is exactly the perturbed-anchor hull, which our clamps keep
   // inside (seatH, seatH+backH) tall and ~[0.6,1.8]·seatD deep.
   return fin(anchors, 'poly');
+}
+
+// ============================================================================
+// validateDesign — the VALIDITY GATE. Builds a design and runs four structural
+// checks; returns { ok:true } or { ok:false, reason }. Pure: no side effects,
+// no randomness — the same design always yields the same verdict. The generator
+// calls this after each candidate and re-rolls on { ok:false }.
+// ============================================================================
+
+// --- 2-D geometry primitives (small, pure) ---------------------------------
+
+/** Orientation sign of the triplet (a,b,c): >0 ccw, <0 cw, 0 collinear. */
+function cross3(a, b, c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+/** Is point q on segment a-b, given the three are collinear? */
+function onSeg(a, b, q) {
+  return Math.min(a.x, b.x) <= q.x && q.x <= Math.max(a.x, b.x)
+    && Math.min(a.y, b.y) <= q.y && q.y <= Math.max(a.y, b.y);
+}
+/** Do segments p1-p2 and p3-p4 properly cross (shared endpoints don't count)? */
+function segmentsCross(p1, p2, p3, p4) {
+  const d1 = cross3(p3, p4, p1);
+  const d2 = cross3(p3, p4, p2);
+  const d3 = cross3(p1, p2, p3);
+  const d4 = cross3(p1, p2, p4);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
+    && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  // collinear overlap cases (a vertex lying inside the other edge)
+  if (d1 === 0 && onSeg(p3, p4, p1)) return true;
+  if (d2 === 0 && onSeg(p3, p4, p2)) return true;
+  if (d3 === 0 && onSeg(p1, p2, p3)) return true;
+  if (d4 === 0 && onSeg(p1, p2, p4)) return true;
+  return false;
+}
+
+/**
+ * Does a closed polygon (array of {x,y}) self-intersect? Tests every pair of
+ * NON-ADJACENT edges (adjacent edges legitimately share a vertex). The closing
+ * edge pts[n-1]->pts[0] is included.
+ */
+function polygonSelfIntersects(pts) {
+  const n = pts.length;
+  if (n < 4) return false;
+  const edge = (i) => [pts[i], pts[(i + 1) % n]];
+  for (let i = 0; i < n; i++) {
+    const [a1, a2] = edge(i);
+    for (let j = i + 1; j < n; j++) {
+      // skip adjacent edges (share a vertex) and the wrap-adjacent pair
+      if (j === i) continue;
+      if (j === (i + 1) % n || i === (j + 1) % n) continue;
+      const [b1, b2] = edge(j);
+      if (segmentsCross(a1, a2, b1, b2)) return true;
+    }
+  }
+  return false;
+}
+
+/** Axis-aligned bbox {minX,maxX,minY,maxY} of a list of {x,y}. */
+function pointsBBox(pts) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+/** Andrew's monotone-chain convex hull of {x,y} points. Returns hull pts ccw. */
+function convexHull(points) {
+  const pts = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  if (pts.length <= 2) return pts;
+  const half = (src) => {
+    const h = [];
+    for (const p of src) {
+      while (h.length >= 2 && cross3(h[h.length - 2], h[h.length - 1], p) <= 0) h.pop();
+      h.push(p);
+    }
+    h.pop();
+    return h;
+  };
+  const lower = half(pts);
+  const upper = half(pts.slice().reverse());
+  return lower.concat(upper);
+}
+
+/** Is point inside (or on) a convex polygon given ccw? Tolerant by `tol`. */
+function pointInConvex(hull, q, tol = 1e-6) {
+  if (hull.length === 1) return Math.hypot(hull[0].x - q.x, hull[0].y - q.y) <= tol;
+  if (hull.length === 2) {
+    // degenerate hull = a segment; inside means on the segment
+    return Math.abs(cross3(hull[0], hull[1], q)) <= tol && onSeg(hull[0], hull[1], q);
+  }
+  for (let i = 0; i < hull.length; i++) {
+    const a = hull[i], b = hull[(i + 1) % hull.length];
+    if (cross3(a, b, q) < -tol) return false; // strictly outside an edge
+  }
+  return true;
+}
+
+// --- per-part geometry helpers ---------------------------------------------
+
+/** Sheet thickness (mm) for a part. */
+function thicknessOf(part) {
+  return SHEETS[part.stock] ? SHEETS[part.stock].thickness : 18;
+}
+
+/** World-Y range [lo,hi] of a part (mirrors the test harness partYRange). */
+function partYRange(part) {
+  if (!part.profile) {
+    return [part.pos.y - part.size.h / 2, part.pos.y + part.size.h / 2];
+  }
+  if (part.profile.plane === 'xz') {
+    const t = thicknessOf(part);
+    return [part.pos.y - t / 2, part.pos.y + t / 2];
+  }
+  const bb = profileBBox(part.profile);
+  return [part.pos.y - bb.h / 2, part.pos.y + bb.h / 2];
+}
+
+/** World X–Z footprint rectangle corners of a part (4 {x,y} pts, y=world-z). */
+function footprintCorners(part) {
+  const hw = part.size.w / 2, hd = part.size.d / 2;
+  const cx = part.pos.x, cz = part.pos.z;
+  return [
+    { x: cx - hw, y: cz - hd }, { x: cx + hw, y: cz - hd },
+    { x: cx + hw, y: cz + hd }, { x: cx - hw, y: cz + hd },
+  ];
+}
+
+// --- the gate ---------------------------------------------------------------
+
+const DEFAULT_PARAMS = {};
+
+/**
+ * validateDesign(design, p, opts) -> { ok, reason? }
+ *
+ * Builds the design (design.build(p)) and runs the structural checks below; the
+ * first failure short-circuits with a specific reason string. Pure.
+ *
+ * opts:
+ *   - seatSpan, seatStock : declare an unsupported seat-bearer span to vet.
+ *   - groundTol           : foot-on-floor tolerance for the CoM hull (default 2).
+ */
+export function validateDesign(design, p = DEFAULT_PARAMS, opts = {}) {
+  const built = design.build(p);
+  const parts = built.parts || [];
+
+  // 1. SELF-INTERSECTION — each profile's outline must be a simple polygon.
+  for (const part of parts) {
+    if (part.profile && Array.isArray(part.profile.pts)) {
+      if (polygonSelfIntersects(part.profile.pts)) {
+        return { ok: false, reason: `self-intersecting profile (${part.ref})` };
+      }
+    }
+  }
+
+  // 2. MIN FEATURE — every slot's web to the nearest panel edge (and to the
+  //    nearest other slot) must be >= bitDia + thickness, or the tab shears out.
+  for (const part of parts) {
+    const slots = (part.profile && part.profile.slots) || part.slots;
+    if (!part.profile || !Array.isArray(slots) || slots.length === 0) continue;
+    const bb = pointsBBox(part.profile.pts);
+    const thk = thicknessOf(part);
+    const minWeb = RELIEF.bitDia + thk;
+    // slot rect in local coords: width `w` on x, `depth` on y, centred on (x,y).
+    const rect = (s) => ({
+      minX: s.x - s.w / 2, maxX: s.x + s.w / 2,
+      minY: s.y - s.depth / 2, maxY: s.y + s.depth / 2,
+    });
+    const rects = slots.map(rect);
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      // web to each panel edge
+      const webEdge = Math.min(
+        r.minX - bb.minX, bb.maxX - r.maxX,
+        r.minY - bb.minY, bb.maxY - r.maxY,
+      );
+      if (webEdge < minWeb) {
+        return { ok: false, reason: `slot web below min feature (${part.ref})` };
+      }
+      // web to other slots (gap between non-overlapping rects)
+      for (let j = i + 1; j < rects.length; j++) {
+        const o = rects[j];
+        const gapX = Math.max(r.minX - o.maxX, o.minX - r.maxX);
+        const gapY = Math.max(r.minY - o.maxY, o.minY - r.maxY);
+        const gap = Math.max(gapX, gapY); // separated along at least one axis
+        if (gap < minWeb) {
+          return { ok: false, reason: `slot web below min feature (${part.ref})` };
+        }
+      }
+    }
+  }
+
+  // 3. CoM IN FOOTPRINT — the volume-weighted centroid, projected to X–Z, must
+  //    fall inside the convex hull of the footprints of the ground-touching
+  //    parts, or the piece tips over.
+  if (parts.length > 0) {
+    const groundTol = opts.groundTol != null ? opts.groundTol : 2;
+    let mass = 0, cx = 0, cz = 0;
+    for (const part of parts) {
+      const v = Math.max(part.size.w * part.size.h * part.size.d, 1e-6);
+      mass += v; cx += v * part.pos.x; cz += v * part.pos.z;
+    }
+    cx /= mass; cz /= mass;
+    const grounded = parts.filter((part) => partYRange(part)[0] <= groundTol);
+    if (grounded.length > 0) {
+      const support = [];
+      for (const part of grounded) support.push(...footprintCorners(part));
+      const hull = convexHull(support);
+      if (!pointInConvex(hull, { x: cx, y: cz })) {
+        return { ok: false, reason: 'centre of mass outside support footprint (tips over)' };
+      }
+    }
+  }
+
+  // 4. SPAN — a declared unsupported seat-bearer span must not exceed the
+  //    advisable max for its stock.
+  if (opts.seatSpan && opts.seatStock) {
+    const maxSpan = beamMaxSpan(opts.seatStock);
+    if (opts.seatSpan > maxSpan) {
+      return { ok: false, reason: `seat span exceeds advisable ${maxSpan}mm for ${opts.seatStock}` };
+    }
+  }
+
+  return { ok: true };
 }
