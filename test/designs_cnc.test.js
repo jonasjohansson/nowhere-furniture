@@ -192,6 +192,22 @@ test('slab trestle bench: invariants + two slab ends + wedge tenon + span note',
     'spine on → seat slot joint declares 3 engagements');
 });
 
+test('slot-together table: invariants + grounded + top at table height', () => {
+  const d = byId('cnc-slot-table');
+  assertDesignInvariants(d);
+  const p = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(p);
+  const ends = out.parts.filter(x => x.group === 'Ends' || /end|leg|slab/i.test(x.ref));
+  assert.ok(ends.length === 2, 'two slab ends');
+  const lo = Math.min(...out.parts.map(x => partYRange(x).lo ?? partYRange(x)[0]));
+  assert.ok(Math.abs(lo) < 1, `feet on the ground (lo=${lo})`);
+  const top = out.parts.find(x => /top/i.test(x.ref));
+  assert.ok(top, 'has a top');
+  const topHi = partYRange(top).hi ?? partYRange(top)[1];
+  assert.ok(topHi > 600 && topHi < 820, 'top near table height');
+  assert.ok(out.joints.some(j => j.type === 'slot-crosslap'), 'screwless slot joints');
+});
+
 test('oval rocker: 4 identical oval outlines, slots differ, screwless', () => {
   const d = byId('cnc-slot-oval-rocker');
   assertDesignInvariants(d);

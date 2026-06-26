@@ -10,6 +10,11 @@ test('CNC slot designs are in the catalog with known categories', () => {
     assert.ok(CATEGORY_ORDER.includes(d.category), `${id} has a known category (${d.category})`);
   }
 });
+test('cnc-slot-table is in the catalog under Tables', () => {
+  const d = CATALOG.find(x => x.id === 'cnc-slot-table');
+  assert.ok(d, 'cnc-slot-table present in CATALOG');
+  assert.equal(d.category, 'Tables', 'cnc-slot-table is categorised as Tables');
+});
 test('existing designs are untouched (board-stool still present)', () => {
   assert.ok(CATALOG.find(x => x.id === 'board-stool'), 'board-stool still in catalog');
 });

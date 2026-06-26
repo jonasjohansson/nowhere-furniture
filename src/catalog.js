@@ -30,6 +30,7 @@ const CATEGORY_BY_ID = {
   'rietveld-crate-lounge': 'Loungers', 'perriand-plank-lounger': 'Loungers', 'barrio-daybed-podium': 'Loungers',
   'modular-box': 'Modular',
   'cnc-slot-stool': 'Stools', 'cnc-slot-bench': 'Benches', 'cnc-slot-lounge': 'Loungers', 'cnc-slot-oval-rocker': 'Chairs',
+  'cnc-slot-table': 'Tables',
 };
 
 for (const d of RAW) d.category = CATEGORY_BY_ID[d.id] || 'Modular';
