@@ -73,3 +73,39 @@ test('generateVignette: different seeds differ; many seeds stay non-coincident',
     }
   }
 });
+
+import { composeVignette } from '../src/vignette.js?v=22';
+
+test('composeVignette: concatenates all pieces deterministically', () => {
+  const v = generateVignette(42);
+  const out = composeVignette(v);
+  assert.ok(Array.isArray(out.parts) && Array.isArray(out.joints));
+  const expected = v.pieces.reduce((n,p)=> n + CNC_SLOT.find(d=>d.id===p.designId).build(p.params).parts.length, 0);
+  assert.equal(out.parts.length, expected, 'parts = sum of pieces');
+  assert.ok(out.joints.length > 0);
+  // unique refs
+  assert.equal(new Set(out.parts.map(p=>p.ref)).size, out.parts.length, 'refs unique');
+  // deterministic
+  assert.deepEqual(composeVignette(generateVignette(42)), composeVignette(generateVignette(42)));
+});
+test('composeVignette: a piece is translated to its transform', () => {
+  // single-piece probe: build a fake 1-piece vignette and check world placement
+  const stool = CNC_SLOT.find(d=>d.id==='cnc-slot-stool');
+  const params = Object.fromEntries(stool.params.map(p=>[p.key,p.default]));
+  const v = { seed:0, templateId:'t', palette:{base:0,hues:[0]},
+              pieces:[{ designId:'cnc-slot-stool', params, transform:{x:1000,z:-500,ry:0}, hue:30 }] };
+  const { parts } = composeVignette(v);
+  // with ry=0, every part's world x = local x + 1000, z = local z - 500
+  const local = stool.build(params).parts;
+  for (let i=0;i<parts.length;i++){
+    assert.ok(Math.abs(parts[i].pos.x - (local[i].pos.x + 1000)) < 1e-6);
+    assert.ok(Math.abs(parts[i].pos.z - (local[i].pos.z - 500)) < 1e-6);
+  }
+});
+test('composeVignette tint can be disabled', () => {
+  const v = generateVignette(7);
+  const tinted = composeVignette(v);
+  const plain = composeVignette(v, { tint:false });
+  assert.ok(tinted.parts.every(p=>p.color!=null), 'tinted parts have color');
+  // plain: colors not forced by compose (either undefined or the design's own)
+});

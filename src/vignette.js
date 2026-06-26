@@ -101,3 +101,76 @@ export function generateVignette(seed) {
 
   return { seed, templateId: template.id, palette, pieces };
 }
+
+// ---------------------------------------------------------------------------
+// hueToColor — a cohesive warm-wood-ish tint per piece, derived from its hue.
+// ---------------------------------------------------------------------------
+// HSL -> packed 0xRRGGBB int. Saturation/lightness are fixed at a muted,
+// furniture-ish level so each piece reads as one coherent stained object.
+// Pure: same hue always yields the same int.
+const TINT_S = 0.45; // saturation
+const TINT_L = 0.55; // lightness
+
+export function hueToColor(hue, s = TINT_S, l = TINT_L) {
+  const h = ((hue % 360) + 360) % 360; // wrap into [0,360)
+  const c = (1 - Math.abs(2 * l - 1)) * s; // chroma
+  const hp = h / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0, g = 0, b = 0;
+  if (hp < 1)      { r = c; g = x; b = 0; }
+  else if (hp < 2) { r = x; g = c; b = 0; }
+  else if (hp < 3) { r = 0; g = c; b = x; }
+  else if (hp < 4) { r = 0; g = x; b = c; }
+  else if (hp < 5) { r = x; g = 0; b = c; }
+  else             { r = c; g = 0; b = x; }
+  const m = l - c / 2;
+  const R = Math.round((r + m) * 255);
+  const G = Math.round((g + m) * 255);
+  const B = Math.round((b + m) * 255);
+  return (R << 16) | (G << 8) | B;
+}
+
+// ---------------------------------------------------------------------------
+// composeVignette — flatten a vignette into ONE world-space parts + joints list
+// ---------------------------------------------------------------------------
+// Each piece's design is built locally, then every part is rigidly placed into
+// world space by the piece's transform {x, z, ry}: the part's local (x,z) is
+// rotated about world Y by ry and translated by (x,z), and ry is added to the
+// part's own yaw so the piece stays a coherent rigid object. y is untouched
+// (pieces are grounded). Refs are prefixed P{i}- so they stay unique across
+// pieces. With tint=true (default) each part is recoloured by hueToColor(hue).
+//
+// NOTE on rotation SIGN: this uses wx = x*cos + z*sin, wz = -x*sin + z*cos
+// (and yaw += ry). The exact visual sign is confirmed in the next task; the
+// convention here is applied consistently to both position and yaw.
+//
+// PURE/deterministic: no Date/Math.random; deep-copies size/pos/rot so callers
+// can't mutate the source designs.
+export function composeVignette(vignette, { tint = true } = {}) {
+  const parts = [];
+  const joints = [];
+  vignette.pieces.forEach((piece, i) => {
+    const design = CNC_SLOT.find((d) => d.id === piece.designId);
+    const built = design.build(piece.params);
+    const RY = piece.transform.ry * Math.PI / 180;
+    const c = Math.cos(RY), s = Math.sin(RY);
+    const color = tint ? hueToColor(piece.hue) : undefined;
+    for (const part of built.parts) {
+      const wx = part.pos.x * c + part.pos.z * s + piece.transform.x;
+      const wz = -part.pos.x * s + part.pos.z * c + piece.transform.z;
+      const placed = {
+        ...part,
+        ref: 'P' + i + '-' + part.ref,
+        size: { ...part.size },
+        pos: { x: wx, y: part.pos.y, z: wz },
+        rot: { ...part.rot, y: (part.rot.y || 0) + piece.transform.ry },
+      };
+      // profile/slots pass through unchanged (CNC outline/cut data); spread
+      // above already carries them. Apply tint colour, or keep the design's own.
+      placed.color = tint ? color : part.color;
+      parts.push(placed);
+    }
+    if (Array.isArray(built.joints)) joints.push(...built.joints);
+  });
+  return { parts, joints };
+}
