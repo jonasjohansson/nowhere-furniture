@@ -27,9 +27,9 @@ function design(id) {
   return d;
 }
 
-/** Yaw (deg) so a piece at (x,z) turns its front toward (tx,tz). The exact
- *  facing convention is verified visually in a later task; the goal here is a
- *  consistent "seat turned toward the focal point" rotation. */
+/** Yaw (deg) so a piece at (x,z) turns its front toward (tx,tz) — a consistent
+ *  "seat turned toward the focal point" rotation, verified correct in the
+ *  rendered scene. */
 function faceTarget(x, z, tx, tz) {
   return Math.atan2(tx - x, tz - z) * RAD2DEG;
 }

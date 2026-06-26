@@ -145,12 +145,14 @@ export function hueToColor(hue, s = TINT_S, l = TINT_L) {
 // (pieces are grounded). Refs are prefixed P{i}- so they stay unique across
 // pieces. With tint=true (default) each part is recoloured by hueToColor(hue).
 //
-// NOTE on rotation SIGN: this uses wx = x*cos + z*sin, wz = -x*sin + z*cos
-// (and yaw += ry). The exact visual sign is confirmed in the next task; the
-// convention here is applied consistently to both position and yaw.
+// ROTATION SIGN: wx = x*cos + z*sin, wz = -x*sin + z*cos (and yaw += ry) —
+// verified correct in the rendered scene (seating faces inward, not mirrored);
+// the convention is applied consistently to both position and yaw.
 //
 // PURE/deterministic: no Date/Math.random; deep-copies size/pos/rot so callers
-// can't mutate the source designs.
+// can't mutate the source designs. profile/slots are passed through by reference
+// (the `...part` spread) — safe because design.build() returns freshly-built
+// parts each call, so there are no shared module-level objects to alias.
 export function composeVignette(vignette, { tint = true } = {}) {
   const parts = [];
   const joints = [];
