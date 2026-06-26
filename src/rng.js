@@ -44,6 +44,11 @@ export function snap(v, step) {
   return Math.round(v / step) * step;
 }
 
+/** Wrap an angle in degrees into [0, 360). Handles negative inputs. */
+export function wrapDeg(deg) {
+  return ((deg % 360) + 360) % 360;
+}
+
 /** Turn a string or number into a uint seed. Numbers pass through as uint. */
 export function seedFrom(x) {
   if (typeof x === 'number') return x >>> 0;

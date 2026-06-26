@@ -15,7 +15,7 @@
 //   palette   = { base:<deg>, hues:[<deg>,...] }  (passed in; we don't build it)
 
 import { CNC_SLOT } from './designs/cnc_slot.js?v=22';
-import { sampleParams } from './vignette.js?v=22';
+import { sampleParams } from './sample_params.js?v=22';
 import { randInt, pick } from './rng.js?v=22';
 
 const RAD2DEG = 180 / Math.PI;
