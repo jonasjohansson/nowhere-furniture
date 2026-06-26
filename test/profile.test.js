@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { profileBBox, profilePanel, sampleArc } from '../src/engineering.js?v=22';
+import { profileBBox, profilePanel, sampleArc } from '../src/engineering.js?v=23';
 
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
 

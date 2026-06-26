@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mulberry32, hashString, randInt, pick, snap, seedFrom } from '../src/rng.js?v=22';
+import { mulberry32, hashString, randInt, pick, snap, seedFrom } from '../src/rng.js?v=23';
 
 test('mulberry32 is deterministic for a seed and in [0,1)', () => {
   const a = mulberry32(123), b = mulberry32(123);

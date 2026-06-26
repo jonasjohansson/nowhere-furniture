@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=22';
-import { mulberry32 } from '../src/rng.js?v=22';
-import { sampleParams } from '../src/sample_params.js?v=22';
+import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=23';
+import { mulberry32 } from '../src/rng.js?v=23';
+import { sampleParams } from '../src/sample_params.js?v=23';
 
 test('sampleParams: in-range, step-snapped, deterministic, buildable', () => {
   for (const d of CNC_SLOT) {
@@ -25,7 +25,7 @@ test('sampleParams varies with the seed', () => {
   assert.ok(sets.size > 1, 'different seeds yield different params');
 });
 
-import { VIGNETTE_TEMPLATES } from '../src/vignette_templates.js?v=22';
+import { VIGNETTE_TEMPLATES } from '../src/vignette_templates.js?v=23';
 
 const FAMILY = new Set(['cnc-slot-stool','cnc-slot-lounge','cnc-slot-bench','cnc-slot-oval-rocker','cnc-slot-table']);
 const PALETTE = { base: 30, hues: [20, 35, 50] };
@@ -47,7 +47,7 @@ test('templates: >=5, each lays out >=2 valid family pieces, deterministically',
   }
 });
 
-import { generateVignette } from '../src/vignette.js?v=22';
+import { generateVignette } from '../src/vignette.js?v=23';
 
 test('generateVignette: deterministic, valid, overlap-free', () => {
   const a = generateVignette(42), b = generateVignette(42);
@@ -74,7 +74,7 @@ test('generateVignette: different seeds differ; many seeds stay non-coincident',
   }
 });
 
-import { composeVignette } from '../src/vignette.js?v=22';
+import { composeVignette } from '../src/vignette.js?v=23';
 
 test('composeVignette: concatenates all pieces deterministically', () => {
   const v = generateVignette(42);

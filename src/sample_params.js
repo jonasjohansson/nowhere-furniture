@@ -1,4 +1,4 @@
-import { snap } from './rng.js?v=22';
+import { snap } from './rng.js?v=23';
 
 /** Randomize a design's params within their declared ranges (snapped to step,
  *  clamped to [min,max]) using the given seeded rng. Deterministic for a fixed

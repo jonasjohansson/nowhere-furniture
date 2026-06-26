@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { crossLapSlot, slotJoint, wedgeTenon } from '../src/engineering.js?v=22';
-import { slotWidth } from '../src/stock.js?v=22';
+import { crossLapSlot, slotJoint, wedgeTenon } from '../src/engineering.js?v=23';
+import { slotWidth } from '../src/stock.js?v=23';
 
 test('crossLapSlot width keys off mating thickness + fit', () => {
   const s = crossLapSlot(100, 200, 18, 60, 'standard');

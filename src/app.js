@@ -1,18 +1,18 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=22';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=22';
-import { computeBOM, bomSummaryLine } from './bom.js?v=22';
-import { SHEETS, TIMBER } from './stock.js?v=22';
-import { MATERIALS } from './materials.js?v=22';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=22';
+import { Builder } from './builder.js?v=23';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=23';
+import { computeBOM, bomSummaryLine } from './bom.js?v=23';
+import { SHEETS, TIMBER } from './stock.js?v=23';
+import { MATERIALS } from './materials.js?v=23';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=23';
 import {
   buildFullDocHTML,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=22';
-import { generateVignette, composeVignette } from './vignette.js?v=22';
-import { seedFrom } from './rng.js?v=22';
+} from './export.js?v=23';
+import { generateVignette, composeVignette } from './vignette.js?v=23';
+import { seedFrom } from './rng.js?v=23';
 
 const $ = (id) => document.getElementById(id);
 

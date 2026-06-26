@@ -59,8 +59,8 @@ import {
   crossLapSlot, slotJoint, wedgeTenon,
   reviewBuild,
   SHEETS,
-} from '../engineering.js?v=22';
-import { slotWidth } from '../stock.js?v=22';
+} from '../engineering.js?v=23';
+import { slotWidth } from '../stock.js?v=23';
 
 const PLY = (key) => SHEETS[key].thickness;   // sheet thickness in mm
 

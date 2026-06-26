@@ -31,8 +31,8 @@
 // the whole drawing into a sensible viewBox (commented at each call site).
 // ============================================================================
 
-import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf, reliefRadius } from './stock.js?v=22';
-import { sampleArc } from './engineering.js?v=22';
+import { SHEETS, TIMBER, SCREWS, lengthOf, fmtSize, stockOf, reliefRadius } from './stock.js?v=23';
+import { sampleArc } from './engineering.js?v=23';
 
 // ----------------------------------------------------------------------------
 // Tiny shared utilities

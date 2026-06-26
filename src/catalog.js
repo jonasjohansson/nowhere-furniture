@@ -2,15 +2,15 @@
 // catalog.js — aggregates the per-category design modules into one CATALOG.
 // Each module exports an array of Design objects (see engineering.js contract).
 // ============================================================================
-import { BENCHES } from './designs/benches.js?v=22';
-import { MARI } from './designs/mari.js?v=22';
-import { LOUNGE } from './designs/lounge.js?v=22';
-import { STOOLS } from './designs/stools_tables.js?v=22';
-import { CLASSICS } from './designs/classics.js?v=22';
-import { MODULAR } from './designs/modular.js?v=22';
-import { INTERLOCK } from './designs/interlock.js?v=22';
-import { HORSE } from './designs/horse.js?v=22';
-import { CNC_SLOT } from './designs/cnc_slot.js?v=22';
+import { BENCHES } from './designs/benches.js?v=23';
+import { MARI } from './designs/mari.js?v=23';
+import { LOUNGE } from './designs/lounge.js?v=23';
+import { STOOLS } from './designs/stools_tables.js?v=23';
+import { CLASSICS } from './designs/classics.js?v=23';
+import { MODULAR } from './designs/modular.js?v=23';
+import { INTERLOCK } from './designs/interlock.js?v=23';
+import { HORSE } from './designs/horse.js?v=23';
+import { CNC_SLOT } from './designs/cnc_slot.js?v=23';
 
 const RAW = [...INTERLOCK, ...CNC_SLOT, ...BENCHES, ...MARI, ...LOUNGE, ...STOOLS, ...CLASSICS, ...MODULAR, ...HORSE];
 

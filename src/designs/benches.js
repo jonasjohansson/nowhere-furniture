@@ -21,7 +21,7 @@ import {
   ERGO, beam, leg, panel, cleat, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   reviewBuild, difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=22';
+} from '../engineering.js?v=23';
 
 // ----------------------------------------------------------------------------
 // Tiny local conveniences (pure). Keep build() functions readable.

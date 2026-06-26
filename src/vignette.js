@@ -1,7 +1,7 @@
-import { mulberry32, wrapDeg } from './rng.js?v=22';
-import { VIGNETTE_TEMPLATES } from './vignette_templates.js?v=22';
-import { CNC_SLOT } from './designs/cnc_slot.js?v=22';
-import { sampleParams } from './sample_params.js?v=22';
+import { mulberry32, wrapDeg } from './rng.js?v=23';
+import { VIGNETTE_TEMPLATES } from './vignette_templates.js?v=23';
+import { CNC_SLOT } from './designs/cnc_slot.js?v=23';
+import { sampleParams } from './sample_params.js?v=23';
 
 // sampleParams now lives in ./sample_params.js so vignette_templates.js can use
 // it without importing vignette.js (breaking the former import cycle). Re-export
