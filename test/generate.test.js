@@ -1,8 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mulberry32 } from '../src/rng.js?v=23';
-import { varyFin, validateDesign } from '../src/generate.js?v=23';
+import { varyFin, validateDesign, generateDesign } from '../src/generate.js?v=23';
 import { profileBBox } from '../src/engineering.js?v=23';
+import { assertDesignInvariants, partYRange } from './designs_cnc.test.js';
+
+// Build a design with its default params and run the validity gate on it.
+const validateDesignDefault = (d) =>
+  validateDesign(d, Object.fromEntries(d.params.map(x => [x.key, x.default])));
 
 test('varyFin: deterministic, in-bounds outline from ergonomic anchors', () => {
   const spec = { seatH: 330, seatD: 520, backAngle: 112, backH: 520 };
@@ -18,6 +23,33 @@ test('varyFin varies with seed', () => {
   const spec = { seatH: 330, seatD: 520, backAngle: 112, backH: 520 };
   const set = new Set([1,2,3,4,5].map(s => JSON.stringify(varyFin(spec, mulberry32(s)))));
   assert.ok(set.size > 1, 'different seeds -> different silhouettes');
+});
+
+// ----------------------------------------------------------------------------
+// generateDesign — INVENTS a first-class Design from a seed. Same contract as a
+// catalog design, so it must pass the SAME strict invariant harness.
+// ----------------------------------------------------------------------------
+test('generateDesign: deterministic first-class Design, valid + grounded + screwless', () => {
+  const d = generateDesign(42), d2 = generateDesign(42);
+  assert.equal(d.id, d2.id);
+  assert.ok(d.id.startsWith('gen-') && Array.isArray(d.params) && typeof d.build === 'function');
+  assertDesignInvariants(d);  // pure build (deepEqual twice), valid parts, plane-aware bbox==size
+  const p = Object.fromEntries(d.params.map(x => [x.key, x.default]));
+  const out = d.build(p);
+  const lo = Math.min(...out.parts.map(x => { const r = partYRange(x); return Array.isArray(r) ? r[0] : r.lo; }));
+  assert.ok(Math.abs(lo) < 1, `grounded, feet at y=0 (got ${lo})`);
+  assert.ok(out.joints.some(j => j.type === 'slot-crosslap'), 'screwless slot joinery');
+  assert.ok(out.parts.filter(x => /fin|side/i.test(x.ref) || x.group === 'Sides').length === 2, 'two side fins');
+});
+
+test('generateDesign: different seeds differ; all pass the validity gate', () => {
+  const ids = new Set();
+  for (let s = 0; s < 30; s++) {
+    const d = generateDesign(s); ids.add(d.id);
+    const v = validateDesignDefault(d);   // build with defaults, assert validateDesign ok
+    assert.ok(v.ok, `seed ${s} invalid: ${v.reason}`);
+  }
+  assert.ok(ids.size >= 25, 'seeds yield distinct designs');
 });
 
 // ----------------------------------------------------------------------------

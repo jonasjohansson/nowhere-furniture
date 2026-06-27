@@ -5,7 +5,11 @@
 // Everything here is PURE: the only randomness is the caller-seeded rng (a
 // mulberry32 function) — no Date, no Math.random.
 // ============================================================================
-import { fin, profileBBox, beamMaxSpan } from './engineering.js?v=23';
+import {
+  ERGO, fin, profileBBox, beamMaxSpan,
+  profilePanel, rect, crossLapSlot, slotJoint,
+} from './engineering.js?v=23';
+import { mulberry32, pick } from './rng.js?v=23';
 import { RELIEF, SHEETS } from './stock.js?v=23';
 
 /** Clamp v into [lo, hi]. */
@@ -85,16 +89,37 @@ export function varyFin(spec, rng) {
   const rearDesired = rearFootX + backLeanX + rearFootFlare;
   const rearActual = Math.min(rearDesired, rightCap);
   // Keep the back-top from poking past the rear foot's clamped x (so the bbox
-  // right edge is exactly rearActual).
-  const backTopXp = Math.min(backTopX + backLeanX, rearActual);
+  // right edge is exactly rearActual). Hold a little budget back from rearActual
+  // so a flat top SHOULDER can sit between the back-top and the rear edge.
+  const topGap = Math.max(0, rearActual - (minX + 1)); // x-budget rear of minX
+  const backTopXp = Math.min(backTopX + backLeanX, minX + 1 + topGap * 0.7);
+  const backTopYp = backTopY + backRiseY;
 
-  // Build the perturbed anchors.
+  // SOFTEN THE FIN TOP. Instead of a single sharp peak at backTop (a spike where
+  // the reclined back edge meets the steep rear edge), add a short, gently-
+  // sloping flat TOP EDGE from backTop rearward to a shoulder. This makes the
+  // silhouette read as a chair-back top, not a point. The shoulder stays at or
+  // below backTop.y and at or left of rearActual, so the bbox (height = backTop.y,
+  // right = rearActual) is unchanged → varyFin's bounds still hold.
+  const shoulderW = clamp(seatD * 0.10, 0, Math.max(0, rearActual - backTopXp));
+  const backShoulderX = Math.min(backTopXp + shoulderW, rearActual);
+  const backShoulderY = backTopYp - Math.min(shoulderW * 0.5, backTopYp * 0.06);
+
+  // Build the perturbed anchors. NAMED so consumers don't depend on the
+  // positional order of the pts array (see the `anchors` key on the return).
+  // backTop = the front-top corner (end of the seatPivot→backTop back edge);
+  // backShoulder = the rear end of the short flat top, leading into the rear edge.
+  const named = {
+    frontFoot:    { x: frontFootX, y: 0 },                  // front foot
+    seatLip:      { x: seatLipX, y: seatH },                // seat front lip
+    seatPivot:    { x: seatBackX, y: seatH },               // seat back / pivot
+    backTop:      { x: backTopXp, y: backTopYp },           // back top (top of the back edge)
+    backShoulder: { x: backShoulderX, y: backShoulderY },   // rear end of the flat top
+    rearFoot:     { x: rearActual, y: 0 },                  // rear foot
+  };
   const anchors = [
-    { x: frontFootX, y: 0 },                                // front foot
-    { x: seatLipX, y: seatH },                              // seat front lip
-    { x: seatBackX, y: seatH },                             // seat back / pivot
-    { x: backTopXp, y: backTopY + backRiseY },              // back top
-    { x: rearActual, y: 0 },                                // rear foot
+    named.frontFoot, named.seatLip, named.seatPivot,
+    named.backTop, named.backShoulder, named.rearFoot,
   ];
 
   // Straight-segment fin. We express the silhouette's character through the
@@ -103,7 +128,13 @@ export function varyFin(spec, rng) {
   // the anchors), which would break the depth/height bounds. Keeping 'poly'
   // means the bbox is exactly the perturbed-anchor hull, which our clamps keep
   // inside (seatH, seatH+backH) tall and ~[0.6,1.8]·seatD deep.
-  return fin(anchors, 'poly');
+  //
+  // Return the profile PLUS its named anchors so consumers (generateDesign's
+  // build) read seat/back crossing geometry by NAME rather than by positional
+  // index into pts — decoupling them from this anchor order / fin() mode. The
+  // extra `anchors` key is additive: `.pts`/`.arcs` are unchanged, so the G1
+  // tests (deepEqual same-seed, profileBBox, varies) still hold.
+  return { ...fin(anchors, 'poly'), anchors: named };
 }
 
 // ============================================================================
@@ -330,4 +361,223 @@ export function validateDesign(design, p = DEFAULT_PARAMS, opts = {}) {
   }
 
   return { ok: true };
+}
+
+// ============================================================================
+// generateDesign(seed) — INVENTS a slot-together plywood chair/lounger as a
+// FIRST-CLASS Design (same contract as a catalog design: { id, name, designer,
+// year, blurb, difficulty, buildTime, params, build }), so it works everywhere
+// the catalog designs do (sliders, vignette, BOM, export) with no new plumbing.
+//
+// The design's SIGNATURE is a seed-frozen varied side-fin silhouette (varyFin).
+// build(p) assembles the SAME structure as cnc-slot-lounge — two mirrored side
+// fins (the frozen silhouette) standing in plane 'xy', grounded (feet at y=0),
+// with a flat SEAT and a reclined BACK that pass THROUGH housings cut in both
+// fins. Screwless (slot/cross-lap joinery only). build() is PURE.
+//
+// VALIDITY GATE + RE-ROLL: the silhouette is generated under a re-roll loop —
+// each candidate's design is run through validateDesign with default params; the
+// first that passes is kept (else the last). The re-roll rng is derived
+// DETERMINISTICALLY from the seed, so generateDesign(seed) is reproducible.
+// ============================================================================
+
+// Extra mortise margin (mm) on top of the min-feature web, so the inset clears
+// the gate's bitDia+thk rule with a little slack even under fit/scale variation.
+const MORTISE_MARGIN = 2;
+
+// Build the Design object for a given frozen fin silhouette + archetype label.
+// Pulled out so the gate can build/validate a candidate before committing to it.
+function designFromFin(seed, archetype, finProfile) {
+  const id = 'gen-' + (seed >>> 0).toString(36);
+  const name = 'Generated ' + archetype.charAt(0).toUpperCase() + archetype.slice(1);
+
+  return {
+    id,
+    name,
+    designer: 'Generative',
+    year: 2026,
+    blurb: 'An invented screwless CNC ' + archetype + ': two seed-grown side fins ' +
+      'carry a flat seat and a reclined back, each panel passing through housings ' +
+      'cut in the fins. Generated from seed, flat-pack, press-fit.',
+    difficulty: 'Medium',
+    buildTime: '45–60 min',
+    params: [
+      { key: 'width', label: 'Seat width (between fins)',        min: 420, max: 640, step: 10, default: 540, unit: 'mm' },
+      { key: 'scale', label: 'Overall scale (%)',                min: 90,  max: 115, step: 1,  default: 100, unit: '%'  },
+      { key: 'fit',   label: 'Fit class (0 snug,1 std,2 outdoor)', min: 0, max: 2, step: 1, default: 1, unit: '' },
+    ],
+
+    build(p) {
+      const FIT = ['snug', 'standard', 'outdoor'][p.fit] ?? 'standard';
+      const stock = 'ply18';
+      const thk = SHEETS[stock].thickness;          // 18mm — the mating thickness
+      const s = (p.scale ?? 100) / 100;             // uniform scale on the silhouette
+
+      // The frozen silhouette, scaled. local-x = front→back depth, local-y =
+      // height, foot on the ground at y=0 (the house side-fin convention).
+      const pts = finProfile.pts.map((q) => ({ x: q.x * s, y: q.y * s }));
+      const outline = { pts, arcs: [] };
+
+      // Read the ergonomic crossing geometry from varyFin's NAMED anchors (not by
+      // positional index into pts) so this stays correct if the anchor order or
+      // fin() mode ever changes. Backstop: fail loudly if the contract is missing.
+      const A = finProfile.anchors;
+      if (!A || !A.seatLip || !A.seatPivot || !A.backTop) {
+        throw new Error('generateDesign: varyFin profile is missing named anchors');
+      }
+      const sc = (q) => ({ x: q.x * s, y: q.y * s }); // anchors in the same scaled frame as pts
+      const seatLip = sc(A.seatLip);                 // seat front lip (≈ seat height)
+      const seatPivot = sc(A.seatPivot);             // seat back / back pivot
+      const backTop = sc(A.backTop);                 // back top
+      const seatH = (seatLip.y + seatPivot.y) / 2;   // seat plane height
+      const seatFrontX = seatLip.x;
+      const seatBackX = seatPivot.x;
+
+      // --- Through-housing slots in the fins ------------------------------
+      // Seat crosses mid-seat at the seat height; notch runs vertically (0°) down
+      // into the fin from the seat top edge. Back crosses mid-back along the
+      // reclined segment; notch rotated 90° to sit square to the lean.
+      const seatMidX = (seatFrontX + seatBackX) / 2;
+      const seatSlot = crossLapSlot(seatMidX, seatH, thk, thk, FIT, 0);
+      // Back housing: sit it on the seatPivot→backTop line, at the segment MIDPOINT,
+      // so the (reclined) back panel and its fin housing meet at the same world
+      // point. The fin-top is softened (see varyFin) so the housing keeps a healthy
+      // web to the fin edge even at the midpoint.
+      const backMidX = (seatPivot.x + backTop.x) / 2;
+      const backMidY = (seatPivot.y + backTop.y) / 2;
+      const backSlot = crossLapSlot(backMidX, backMidY, thk, thk, FIT, 90);
+      const finSlots = [seatSlot, backSlot];
+
+      // Recline of the back segment, measured from the +x (horizontal) axis toward
+      // +y (up). For an 'xz' panel the profile length runs along world-x, so a
+      // rotation about world-Z by this angle lays the panel ALONG the seatPivot→
+      // backTop line — leaning rear-and-up exactly like the fins' back edge.
+      const backReclineDeg = Math.atan2(backTop.y - seatPivot.y, backTop.x - seatPivot.x) * 180 / Math.PI;
+
+      // --- Seat & back panels --------------------------------------------
+      // Each spans `width` in z between the fins. The fins are at z = ±width/2 so
+      // the panel mortises align with the fin housings.
+      const seatLen = Math.max(seatBackX - seatFrontX, thk * 4);
+      const backLen = Math.max(Math.hypot(backTop.x - seatPivot.x, backTop.y - seatPivot.y), thk * 4);
+      const seatProfile = rect(seatLen, p.width);
+      const backProfile = rect(backLen, p.width);
+      // Inset the end mortises far enough that the web from the slot rect to the
+      // panel edge clears the gate's min-feature rule (bitDia + thk), plus half the
+      // slot depth (the rect's own half-extent) and a small margin. Generated panels
+      // must satisfy this gate explicitly, where the hand-tuned lounge can sidestep
+      // it with mortiseInset = thk; keeps the panel-end tabs from shearing.
+      const mortiseInset = RELIEF.bitDia + thk + thk / 2 + MORTISE_MARGIN;
+      const seatPanelSlots = [
+        crossLapSlot(seatLen / 2, mortiseInset, thk, thk, FIT, 0),
+        crossLapSlot(seatLen / 2, p.width - mortiseInset, thk, thk, FIT, 0),
+      ];
+      const backPanelSlots = [
+        crossLapSlot(backLen / 2, mortiseInset, thk, thk, FIT, 0),
+        crossLapSlot(backLen / 2, p.width - mortiseInset, thk, thk, FIT, 0),
+      ];
+
+      const halfW = p.width / 2;
+      const parts = [];
+
+      // GROUNDING: the builder centres the profile's BBOX on pos, so placing the
+      // fin at pos.y = bbox.h/2 lands the feet on the floor (world y=0) and makes
+      // local-y == world-y — the seat/back housings land at their authored heights.
+      const finBBox = profileBBox(outline);
+      const finCentreY = finBBox.h / 2;
+      // The fins stand at world x=0, but the builder centres their (foot-anchored)
+      // profile bbox on that pos — shifting every local x by -finCx in world space.
+      // So a fin housing authored at local x lands at world x = (local x − finCx).
+      // The seat/back panels must sit on those housing world-x's to actually cross-
+      // lap the fins, so offset their pos.x by −finCx (mirrors the local→world map).
+      const finXs = outline.pts.map((q) => q.x);
+      const finCx = Math.min(...finXs) + finBBox.w / 2;
+      const finL = profilePanel('FIN-L', 'Side fin', stock,
+        { plane: 'xy', ...outline, slots: finSlots },
+        { x: 0, y: finCentreY, z: -halfW }, 'Sides');
+      const finR = profilePanel('FIN-R', 'Side fin', stock,
+        { plane: 'xy', ...outline, slots: finSlots },
+        { x: 0, y: finCentreY, z: halfW }, 'Sides');
+
+      // Seat panel: flat board (plane 'xz'), thickness up, at the seat height,
+      // centred on the seat housing's world point so it meshes with both fins.
+      const seat = profilePanel('SEAT', 'Seat', stock,
+        { plane: 'xz', ...seatProfile, slots: seatPanelSlots },
+        { x: seatMidX - finCx, y: seatH - thk / 2, z: 0 }, 'Seat');
+
+      // Back panel: an upright board STANDING along the fins' reclined back edge.
+      // Centred on the back housing's world point (the seatPivot→backTop midpoint,
+      // mapped to world x) and tilted via rot.z so it lays along that segment
+      // (rear-and-up). size stays the untilted bbox (the strict harness validates
+      // that); rot tilts the rendered mesh separately.
+      const back = {
+        ...profilePanel('BACK', 'Back', stock,
+          { plane: 'xz', ...backProfile, slots: backPanelSlots },
+          { x: backMidX - finCx, y: backMidY, z: 0 }, 'Back'),
+        rot: { x: 0, y: 0, z: backReclineDeg },
+      };
+
+      parts.push(finL, finR, seat, back);
+
+      const joints = [
+        slotJoint(2, 'seat board passes through a housing in each side fin (2 engagements)'),
+        slotJoint(2, 'back board passes through a housing in each side fin (2 engagements)'),
+      ];
+
+      const steps = [
+        `CNC-cut from one ${stock} sheet: 2 identical seed-grown side fins (` +
+          `${Math.round(profileBBox(outline).w)}mm deep, ${Math.round(profileBBox(outline).h)}mm tall) ` +
+          `+ 1 seat ${Math.round(seatLen)}×${p.width}mm + 1 back ${Math.round(backLen)}×${p.width}mm.`,
+        `All slots are cut for a ${FIT} fit (${seatSlot.w.toFixed(2)}mm wide for ${thk}mm ply). Clear any dogbone reliefs before assembly.`,
+        'Stand the two side fins upright, slot side up, facing each other the seat width apart.',
+        `Drop the seat board into the seat housings (seat top at ${Math.round(seatH)}mm) so it meshes flush with both fins.`,
+        `Lower the back board into the reclined back housings (${Math.round(backReclineDeg)}° from horizontal) so it stands along the fins' back edge and locks them together.`,
+        'Check it sits flat and rocks on no foot; ease all edges. For outdoor use pick the outdoor fit and oil the ply.',
+      ];
+      const notes = [
+        'Generated: the side-fin silhouette is grown from the design seed, then gated for structural validity before it is offered.',
+        'Screwless: the four housings lock the seat, back and both fins into one rigid frame. Fit class sets every slot clearance.',
+        'All four parts nest from a single 18mm ply sheet with the two fins identical, so it cuts and stores flat.',
+      ];
+
+      return { parts, joints, steps, notes };
+    },
+  };
+}
+
+/**
+ * generateDesign(seed) -> a first-class Design (deterministic + practically
+ * always valid). Picks an ERGO archetype, grows a frozen varied fin, and wraps
+ * it as a Design — re-rolling the silhouette (deterministically) until the
+ * design passes the validity gate.
+ */
+export function generateDesign(seed) {
+  const baseRng = mulberry32(seed >>> 0);
+  // Archetype pick fixes the ergonomic spec the fin is grown from.
+  const archetypes = [
+    { label: 'chair',  spec: ERGO.chair },
+    { label: 'lounge', spec: ERGO.lounge },
+  ];
+  const choice = pick(baseRng, archetypes);
+  const archetype = choice.label;
+  const spec = choice.spec;
+
+  const K = 12;                                   // re-roll attempts
+  let last = null;
+  for (let attempt = 0; attempt < K; attempt++) {
+    // Attempt 0 continues the base rng (so a normally-valid first roll stays
+    // cheap & stable); later attempts derive a fresh, seed-deterministic rng.
+    const rng = attempt === 0
+      ? baseRng
+      : mulberry32((seed ^ Math.imul(attempt + 1, 0x9e3779b1)) >>> 0);
+    const finProfile = varyFin(spec, rng);
+    const design = designFromFin(seed, archetype, finProfile);
+    const defaults = Object.fromEntries(design.params.map((x) => [x.key, x.default]));
+    const verdict = validateDesign(design, defaults);
+    // Provenance tag so BOM/export/Lab (and the G5 vignette feed) can tell a
+    // gated-valid design from a re-roll-exhausted fallback. attempts is 1-based.
+    design._gen = { method: 'spine', archetype, attempts: attempt + 1, valid: verdict.ok };
+    last = design;
+    if (verdict.ok) return design;
+  }
+  return last;   // deterministic fallback: the last attempt (tagged valid:false)
 }
