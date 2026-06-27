@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=23';
-import { INTERLOCK } from '../src/designs/interlock.js?v=23';
-import { buildCutSheetSVG, buildFullDocHTML } from '../src/export.js?v=23';
-import { computeBOM } from '../src/bom.js?v=23';
-import { CATALOG } from '../src/catalog.js?v=23';
+import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=24';
+import { INTERLOCK } from '../src/designs/interlock.js?v=24';
+import { buildCutSheetSVG, buildFullDocHTML } from '../src/export.js?v=24';
+import { computeBOM } from '../src/bom.js?v=24';
+import { CATALOG } from '../src/catalog.js?v=24';
 
 // Build a design to its default parameters.
 const build = (catalog, id) => {

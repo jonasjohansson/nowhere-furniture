@@ -1,19 +1,19 @@
 // ============================================================================
 // app.js — integration shell. Wires catalog -> builder -> BOM -> export.
 // ============================================================================
-import { Builder } from './builder.js?v=23';
-import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=23';
-import { computeBOM, bomSummaryLine } from './bom.js?v=23';
-import { SHEETS, TIMBER } from './stock.js?v=23';
-import { MATERIALS } from './materials.js?v=23';
-import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=23';
+import { Builder } from './builder.js?v=24';
+import { CATALOG, CATEGORY_ORDER } from './catalog.js?v=24';
+import { computeBOM, bomSummaryLine } from './bom.js?v=24';
+import { SHEETS, TIMBER } from './stock.js?v=24';
+import { MATERIALS } from './materials.js?v=24';
+import { t, tParam, getLang, setLang, applyStatic } from './i18n.js?v=24';
 import {
   buildFullDocHTML,
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
-} from './export.js?v=23';
-import { generateVignette, composeVignette } from './vignette.js?v=23';
-import { generateDesign } from './generate.js?v=23';
-import { seedFrom } from './rng.js?v=23';
+} from './export.js?v=24';
+import { generateVignette, composeVignette } from './vignette.js?v=24';
+import { generateDesign } from './generate.js?v=24';
+import { seedFrom } from './rng.js?v=24';
 
 const $ = (id) => document.getElementById(id);
 

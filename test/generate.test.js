@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mulberry32 } from '../src/rng.js?v=23';
-import { varyFin, validateDesign, generateDesign } from '../src/generate.js?v=23';
-import { profileBBox } from '../src/engineering.js?v=23';
+import { mulberry32 } from '../src/rng.js?v=24';
+import { varyFin, validateDesign, generateDesign } from '../src/generate.js?v=24';
+import { profileBBox } from '../src/engineering.js?v=24';
 import { assertDesignInvariants, partYRange } from './designs_cnc.test.js';
 
 // Build a design with its default params and run the validity gate on it.

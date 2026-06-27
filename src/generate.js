@@ -8,9 +8,9 @@
 import {
   ERGO, fin, profileBBox, beamMaxSpan,
   profilePanel, rect, crossLapSlot, slotJoint,
-} from './engineering.js?v=23';
-import { mulberry32, pick } from './rng.js?v=23';
-import { RELIEF, SHEETS } from './stock.js?v=23';
+} from './engineering.js?v=24';
+import { mulberry32, pick } from './rng.js?v=24';
+import { RELIEF, SHEETS } from './stock.js?v=24';
 
 /** Clamp v into [lo, hi]. */
 function clamp(v, lo, hi) {

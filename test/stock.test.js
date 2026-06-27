@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SLOT_FIT, RELIEF, slotWidth, reliefRadius } from '../src/stock.js?v=23';
+import { SLOT_FIT, RELIEF, slotWidth, reliefRadius } from '../src/stock.js?v=24';
 
 test('fit classes exist with sane clearances (mm, per side)', () => {
   assert.ok(SLOT_FIT.snug < SLOT_FIT.standard);

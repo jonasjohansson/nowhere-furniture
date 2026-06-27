@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CATALOG, CATEGORY_ORDER } from '../src/catalog.js?v=23';
+import { CATALOG, CATEGORY_ORDER } from '../src/catalog.js?v=24';
 
 test('CNC slot designs are in the catalog with known categories', () => {
   const ids = ['cnc-slot-stool','cnc-slot-lounge','cnc-slot-bench','cnc-slot-oval-rocker'];
