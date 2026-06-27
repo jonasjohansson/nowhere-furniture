@@ -12,6 +12,7 @@ import {
   downloadFile, exportProjectJSON, readProjectJSON, printHTML,
 } from './export.js?v=23';
 import { generateVignette, composeVignette } from './vignette.js?v=23';
+import { generateDesign } from './generate.js?v=23';
 import { seedFrom } from './rng.js?v=23';
 
 const $ = (id) => document.getElementById(id);
@@ -25,8 +26,9 @@ let currentParams = {};
 let currentJoints = [];   // joints from the active design template (drive screws)
 let currentBuild = null;  // last {parts, joints, steps, notes} from build()
 let lastParts = [];
-let mode = 'design';      // 'design' | 'vignette'
+let mode = 'design';      // 'design' | 'vignette' | 'lab'
 let currentVignette = null; // last {seed, templateId, palette, pieces} shown
+let currentLabSeed = null;  // last seed shown in the Design Lab (a generated piece)
 
 // ---------------------------------------------------------------------------
 // catalog list
@@ -142,6 +144,7 @@ builder.on('change', (parts) => {
 });
 builder.on('select', (spec) => {
   if (mode === 'vignette') return; // generated scenes are read-only — no per-part edits
+  // Lab is a single editable generated piece, so the inspector is allowed there.
   renderInspector(spec);
 });
 
@@ -373,22 +376,52 @@ function shuffleVignette() {
   showVignette(seed);
 }
 
-// Switch between Design and Vignette. Design restores the active catalog design;
-// Vignette shows the current scene (or rolls a fresh seed on first entry).
+// ---------------------------------------------------------------------------
+// Design Lab — invent a slot-together piece from a seed, then tune it.
+// A generated design is a first-class Design, so we reuse the catalog path:
+// renderParams/rebuildFromParams drive sliders + BOM + export with no new plumbing.
+// ---------------------------------------------------------------------------
+function showLab(seed) {
+  const d = generateDesign(seed);
+  currentDesign = d;
+  currentParams = Object.fromEntries(d.params.map((p) => [p.key, p.default]));
+  markActiveCat(null);           // no catalog item is active for an invented piece
+  renderDesignHead();
+  renderParams();
+  rebuildFromParams();           // sets currentJoints + builder.loadParts -> 'change' -> BOM
+  currentLabSeed = seed >>> 0;
+  location.hash = 'g=' + (seed >>> 0).toString(36);
+}
+
+function generateLab() {
+  const seed = (Math.random() * 2 ** 32) >>> 0; // a UI action — the only new Math.random in Lab
+  showLab(seed);
+}
+
+// Switch between Design, Vignette and Lab. Design restores the active catalog
+// design; Vignette shows the current scene (or rolls a fresh seed on first entry);
+// Lab shows the current invented piece (or generates a fresh one on first entry).
 function setAppMode(next) {
   if (next === mode) return;
   mode = next;
   for (const b of document.querySelectorAll('#mode-toggle button'))
     b.classList.toggle('active', b.dataset.mode === mode);
   const isVig = mode === 'vignette';
-  $('catalog-section').hidden = isVig;
+  const isLab = mode === 'lab';
+  $('catalog-section').hidden = isVig || isLab; // no catalog list in vignette/lab
   $('vignette-section').hidden = !isVig;
-  $('design-section').hidden = isVig;     // hide design head/params/material in vignette mode
-  $('inspect-section').hidden = isVig;    // generated scenes are read-only
+  $('lab-section').hidden = !isLab;
+  // Keep the params panel visible in Lab so sliders tune the generated piece;
+  // only hide it (head/params/material) for the read-only vignette scene.
+  $('design-section').hidden = isVig;
+  $('inspect-section').hidden = isVig;    // vignette scenes are read-only; Lab keeps the inspector
   builder.select(null);
   if (isVig) {
     if (currentVignette) showVignette(currentVignette.seed);
     else shuffleVignette();
+  } else if (isLab) {
+    if (currentLabSeed != null) showLab(currentLabSeed);
+    else generateLab();
   } else {
     selectDesign(currentDesign?.id || 'board-stool');
   }
@@ -399,6 +432,7 @@ $('mode-toggle').addEventListener('click', (e) => {
   setAppMode(btn.dataset.mode);
 });
 $('shuffle-btn').addEventListener('click', shuffleVignette);
+$('generate-btn').addEventListener('click', generateLab);
 
 // ---------------------------------------------------------------------------
 // export
@@ -426,10 +460,19 @@ $('right').addEventListener('click', (e) => {
   const bom = currentBOM();
   switch (btn.dataset.exp) {
     case 'pdf': {
-      const meta = mode === 'vignette'
-        ? { ...exportMeta(), projectName: 'Vignette ' + seedStr(currentVignette?.seed ?? 0),
-            name: 'Vignette ' + seedStr(currentVignette?.seed ?? 0) }
-        : { ...exportMeta(), name: currentDesign?.name, steps: currentBuild?.steps, notes: currentBuild?.notes };
+      let meta;
+      if (mode === 'vignette') {
+        const title = 'Vignette ' + seedStr(currentVignette?.seed ?? 0);
+        meta = { ...exportMeta(), projectName: title, name: title };
+      } else if (mode === 'lab') {
+        // Title the build sheet with the generated piece's name + its id (gen-<seed36>).
+        const title = `${currentDesign?.name ?? 'Generated'} ${currentDesign?.id ?? ''}`.trim();
+        meta = { ...exportMeta(), projectName: title, name: title,
+                 steps: currentBuild?.steps, notes: currentBuild?.notes };
+      } else {
+        meta = { ...exportMeta(), name: currentDesign?.name,
+                 steps: currentBuild?.steps, notes: currentBuild?.notes };
+      }
       printHTML(buildFullDocHTML(bom, meta));
       break;
     }
@@ -475,19 +518,32 @@ buildStockSelect();
 buildMaterialSelect();
 renderCatalog();
 
-// Permalink: #v=<base36 seed> boots straight into a reproduced vignette;
-// otherwise fall back to the featured design.
+// Permalink: #v=<base36 seed> reproduces a vignette; #g=<base36 seed> reproduces an
+// invented Lab piece; otherwise fall back to the featured design.
 const vigMatch = /^#?v=(.+)$/.exec(location.hash);
+const labMatch = /^#?g=(.+)$/.exec(location.hash);
+function syncToggle(m) {
+  for (const b of document.querySelectorAll('#mode-toggle button'))
+    b.classList.toggle('active', b.dataset.mode === m);
+}
 if (vigMatch) {
   mode = 'vignette';
-  for (const b of document.querySelectorAll('#mode-toggle button'))
-    b.classList.toggle('active', b.dataset.mode === 'vignette');
+  syncToggle('vignette');
   $('catalog-section').hidden = true;
   $('vignette-section').hidden = false;
+  $('lab-section').hidden = true;
   $('design-section').hidden = true;
   $('inspect-section').hidden = true;
-  const seed = seedFrom(parseInt(vigMatch[1], 36));
-  showVignette(seed);
+  showVignette(seedFrom(parseInt(vigMatch[1], 36)));
+} else if (labMatch) {
+  mode = 'lab';
+  syncToggle('lab');
+  $('catalog-section').hidden = true;
+  $('vignette-section').hidden = true;
+  $('lab-section').hidden = false;
+  $('design-section').hidden = false; // keep the params panel for tuning
+  $('inspect-section').hidden = false;
+  showLab(seedFrom(parseInt(labMatch[1], 36)));
 } else {
   selectDesign('board-stool'); // the featured design, pinned to the top of the catalog
 }
