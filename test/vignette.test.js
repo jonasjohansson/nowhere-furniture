@@ -109,3 +109,30 @@ test('composeVignette tint can be disabled', () => {
   assert.ok(tinted.parts.every(p=>p.color!=null), 'tinted parts have color');
   // plain: colors not forced by compose (either undefined or the design's own)
 });
+
+import { generateDesign } from '../src/generate.js?v=23';
+
+test('vignette can include generated pieces, deterministically', () => {
+  // sweep seeds to find at least one vignette that used a generated design
+  let found = null;
+  for (let s = 0; s < 60 && !found; s++) {
+    const v = generateVignette(s);
+    if (v.pieces.some(p => p.designId.startsWith('gen-'))) found = { s, v };
+  }
+  assert.ok(found, 'some seed produces a vignette with a generated piece');
+  const { s, v } = found;
+  // the vignette carries a registry of its generated designs
+  assert.ok(v.generated && typeof v.generated === 'object', 'has generated map');
+  for (const p of v.pieces) if (p.designId.startsWith('gen-'))
+    assert.ok(v.generated[p.designId] && typeof v.generated[p.designId].build === 'function',
+      'generated design is in the map');
+  // deterministic: same seed reproduces identical vignette + composition
+  assert.deepEqual(generateVignette(s), generateVignette(s));
+  const a = composeVignette(generateVignette(s));
+  const b = composeVignette(generateVignette(s));
+  assert.deepEqual(a, b, 'compose deterministic with generated pieces');
+  // compose resolves generated designs: part count = sum over pieces (catalog OR generated)
+  const resolve = (id) => v.generated[id] || CNC_SLOT.find(d => d.id === id);
+  const expected = v.pieces.reduce((n,p)=> n + resolve(p.designId).build(p.params).parts.length, 0);
+  assert.equal(a.parts.length, expected);
+});
