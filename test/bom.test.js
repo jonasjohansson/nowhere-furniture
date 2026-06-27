@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=23';
-import { computeBOM } from '../src/bom.js?v=23';
+import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=24';
+import { computeBOM } from '../src/bom.js?v=24';
 
 // computeBOM's real signature is computeBOM({ parts, joints }) -> a BOM object
 // with { sheets, timber, screws, totals, warnings } (+ new joinery summary).

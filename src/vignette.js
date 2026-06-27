@@ -1,7 +1,8 @@
-import { mulberry32, wrapDeg } from './rng.js?v=23';
-import { VIGNETTE_TEMPLATES } from './vignette_templates.js?v=23';
-import { CNC_SLOT } from './designs/cnc_slot.js?v=23';
-import { sampleParams } from './sample_params.js?v=23';
+import { mulberry32, wrapDeg } from './rng.js?v=24';
+import { VIGNETTE_TEMPLATES } from './vignette_templates.js?v=24';
+import { CNC_SLOT } from './designs/cnc_slot.js?v=24';
+import { sampleParams } from './sample_params.js?v=24';
+import { generateDesign } from './generate.js?v=24';
 
 // sampleParams now lives in ./sample_params.js so vignette_templates.js can use
 // it without importing vignette.js (breaking the former import cycle). Re-export
@@ -20,6 +21,39 @@ export { sampleParams };
 const GOLDEN_HASH = 0x9e3779b1; // mix constant for deriving per-attempt seeds
 const ATTEMPTS = 12;            // max re-roll attempts before accepting the last
 const OVERLAP_K = 0.8;          // allow a little visual overlap (furniture isn't a disc)
+
+// --- Generated-piece substitution (Task G5) --------------------------------
+// generateDesign() invents chairs/loungers — single-seat forms. So we only swap
+// in a generated design for a SEAT-LIKE catalog piece (a stool/lounge/rocker),
+// never the table or a multi-seat bench (different footprint/role). Per eligible
+// piece we substitute with probability USE_GENERATED, driven by the SAME seeded
+// rng, so the choice is deterministic and permalink-reproducible.
+const USE_GENERATED = 0.4;      // per-eligible-piece substitution rate
+const GEN_HASH = 0x85ebca6b;    // mix constant for per-piece generated sub-seeds
+// Catalog roles a generated chair/lounger can stand in for (single-seat forms).
+const GEN_SUBSTITUTABLE = new Set([
+  'cnc-slot-stool', 'cnc-slot-lounge', 'cnc-slot-oval-rocker',
+]);
+
+// Memo of generated designs by id. generateDesign() is pure but returns a FRESH
+// object (with a fresh build closure) each call; caching by id makes the same
+// seed yield a reference-stable design so generateVignette(s) deep-equals
+// itself (functions compare by reference) — like the catalog singletons.
+const GEN_CACHE = new Map();
+function memoGenerateDesign(subSeed) {
+  const cached = GEN_CACHE.get(subSeed);
+  if (cached) return cached;
+  const gd = generateDesign(subSeed);
+  GEN_CACHE.set(subSeed, gd);
+  return gd;
+}
+
+/** Resolve a piece's design id to a Design: a generated one from the vignette's
+ *  registry if present, else the catalog entry. Single source of truth used by
+ *  the overlap guard and composeVignette's two resolution sites. */
+function resolveDesign(designId, generated) {
+  return (generated && generated[designId]) || CNC_SLOT.find((d) => d.id === designId);
+}
 
 /** Union X–Z bounding box of a part list. Each part has pos (centre) + size
  *  (w,h,d): the footprint is the X (size.w) by Z (size.d) extent. Returns
@@ -40,16 +74,17 @@ function bboxOf(parts) {
  *  Rotation-invariant: the half-diagonal of the local XZ bbox is the same under
  *  any yaw, so transform.ry needn't be applied before the circle-vs-circle
  *  overlap test below — the bounding disc is unaffected by rotation. */
-function footprintRadius(piece) {
-  const design = CNC_SLOT.find((d) => d.id === piece.designId);
+function footprintRadius(piece, generated) {
+  const design = resolveDesign(piece.designId, generated);
   const { parts } = design.build(piece.params);
   const bb = bboxOf(parts);
   return 0.5 * Math.hypot(bb.w, bb.d);
 }
 
-/** True if any two pieces' footprint discs interpenetrate beyond the k slack. */
-function hasOverlap(pieces) {
-  const r = pieces.map(footprintRadius);
+/** True if any two pieces' footprint discs interpenetrate beyond the k slack.
+ *  `generated` lets the disc use a substituted generated design's footprint. */
+function hasOverlap(pieces, generated) {
+  const r = pieces.map((p) => footprintRadius(p, generated));
   for (let i = 0; i < pieces.length; i++) {
     for (let j = i + 1; j < pieces.length; j++) {
       // transform.x/z is the piece's WORLD placement; r[] is its LOCAL footprint
@@ -95,16 +130,37 @@ export function generateVignette(seed) {
   const palette = buildPalette(rng);
 
   let pieces = null;
+  let generated = {};
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     // Each attempt derives a fresh, deterministic rng from the seed + attempt
     // index, so re-rolls stay pure (no Date/Math.random) and same-seed-same-
     // result holds. The first overlap-free layout wins; else we keep the last.
     const attemptRng = mulberry32((seed ^ Math.imul(attempt + 1, GOLDEN_HASH)) >>> 0);
     pieces = template.layout(attemptRng, palette);
-    if (!hasOverlap(pieces)) break;
+    // Seed-deterministically substitute generated chairs/loungers for eligible
+    // (single-seat) catalog pieces. Done BEFORE the overlap check so a generated
+    // piece's own footprint is what the disc test sees. Re-uses the same
+    // attemptRng so the choice rerolls with the layout and stays reproducible.
+    generated = {};
+    pieces.forEach((piece, i) => {
+      if (!GEN_SUBSTITUTABLE.has(piece.designId)) return;
+      if (attemptRng() >= USE_GENERATED) return;
+      // Per-piece sub-seed: mix the vignette seed, attempt, and piece index so
+      // each substituted piece gets a distinct, deterministic generated design.
+      const subSeed = (seed
+        ^ Math.imul(attempt + 1, GOLDEN_HASH)
+        ^ Math.imul(i + 1, GEN_HASH)) >>> 0;
+      const gd = memoGenerateDesign(subSeed);
+      piece.designId = gd.id;
+      // Generated designs build from default params; the layout's sampled catalog
+      // params don't apply to an invented design, so use the generated defaults.
+      piece.params = Object.fromEntries(gd.params.map((x) => [x.key, x.default]));
+      generated[gd.id] = gd;
+    });
+    if (!hasOverlap(pieces, generated)) break;
   }
 
-  return { seed, templateId: template.id, palette, pieces };
+  return { seed, templateId: template.id, palette, pieces, generated };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +213,7 @@ export function composeVignette(vignette, { tint = true } = {}) {
   const parts = [];
   const joints = [];
   vignette.pieces.forEach((piece, i) => {
-    const design = CNC_SLOT.find((d) => d.id === piece.designId);
+    const design = resolveDesign(piece.designId, vignette.generated);
     const built = design.build(piece.params);
     const RY = piece.transform.ry * Math.PI / 180;
     const c = Math.cos(RY), s = Math.sin(RY);

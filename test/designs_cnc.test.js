@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { profileBBox, SHEETS } from '../src/engineering.js?v=23';
-import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=23';
+import { profileBBox, SHEETS } from '../src/engineering.js?v=24';
+import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=24';
 
 const approx = (a, b) => Math.abs(a - b) < 1e-6;
 

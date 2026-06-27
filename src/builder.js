@@ -27,11 +27,11 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SHEETS, TIMBER, MM, RELIEF, reliefRadius } from './stock.js?v=23';
-import { profileBBox, sampleArc } from './engineering.js?v=23';
-import { disposeWoodCache } from './wood.js?v=23';
-import { materialMaterial } from './materials.js?v=23';
-import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=23';
+import { SHEETS, TIMBER, MM, RELIEF, reliefRadius } from './stock.js?v=24';
+import { profileBBox, sampleArc } from './engineering.js?v=24';
+import { disposeWoodCache } from './wood.js?v=24';
+import { materialMaterial } from './materials.js?v=24';
+import { createWoodMaterial as woodPhotoMaterial, disposeWoodCache as disposePhotoCache } from './wood-photo.js?v=24';
 
 // Local id counter — kept independent of stock.uid() so ids stay deterministic
 // and pure (no Date.now / Math.random anywhere in this module).

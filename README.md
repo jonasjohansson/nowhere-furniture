@@ -6,7 +6,8 @@ a festival barrio (built for Nowhere). Two materials only — **plywood sheet** 
 catalog, tune its parametrics, read off the full metric **bill of materials**, and
 export cut sheets + shop drawings. Or flip to **Vignette mode** and let the Shuffle
 arrange the slot-together family into a functional hangout scene with one combined
-build sheet.
+build sheet. Or open the **Design Lab** and let a seed *invent* a brand-new
+slot-together piece you can then tune, cost, and build like any catalog design.
 
 Inspired by the honest-plank lineage: **Enzo Mari's Autoprogettazione**, Rietveld's
 crate furniture, Donald Judd's plywood volumes, Prouvé, Perriand, Van Bo.
@@ -25,10 +26,19 @@ Static site, no build step. Visit it on the local server:
   stools, communal tables and a CNC **slot-together** family (now 5 designs:
   stool, lounge chair, bench, oval rocker, table) — each with engineered joinery,
   assembly steps, and a difficulty/build-time badge
+- **Design Lab / Generate mode** — feed it a seed and it **invents a new
+  slot-together piece** (a seeded spine-variation chair/lounger), then tune it with
+  the normal sliders, read its **live BOM**, and export its build sheet. A generated
+  piece is a **first-class design** — it works with the BOM and every export exactly
+  like a catalog piece. A **validity gate** (no self-intersection, honest minimum
+  features, centre-of-mass over the footprint, span within deflection limits) means
+  every piece it offers is buildable, grounded, and stable. Reproduce or share any
+  invention via `#g=<seed>` permalinks
 - **Vignette / Shuffle mode** — a deterministic Shuffle arranges the slot-together
   family into fun, functional hangout scenes, then rolls up a **combined BOM** and a
-  **profile-aware cut sheet** for the whole set. Every scene is reproducible and
-  shareable via `#v=<seed>` permalinks
+  **profile-aware cut sheet** for the whole set. Shuffled scenes now **mix in
+  generated pieces** alongside the fixed catalog, so a hangout can feature invented
+  forms too. Every scene is reproducible and shareable via `#v=<seed>` permalinks
 - **3D builder** — orbit, select, move/rotate gizmo, grid-snap, live dimensions,
   **undo/redo** (⌘Z / ⌘⇧Z), procedural warm-wood materials + soft shadows
 - **Live BOM** — plywood sheets (2D-nested), reglar (cut-optimised into stock lengths),
@@ -51,9 +61,10 @@ Modular ES modules against one pinned data contract (`PartSpec` / `Joint` / `Des
 | `src/export.js` | CSV / print-HTML / cut-sheet SVG / elevations SVG / project JSON |
 | `src/rng.js` | Tiny deterministic seeded PRNG — the basis of reproducible Shuffles |
 | `src/sample_params.js` | Seeded sampling of each design's parametrics within engineered bounds |
+| `src/generate.js` | `generateDesign(seed)` — *invents* a first-class slot-together design via seeded spine-variation (`varyFin`), gated by `validateDesign` (self-intersection / min-feature / centre-of-mass / span). Deterministic |
 | `src/vignette_templates.js` | Scene templates — which slot-together pieces go where in a hangout |
 | `src/vignette.js` | Builds a vignette from a seed: places the family, rolls up a combined BOM + cut sheet |
-| `src/app.js` | Integration shell — wires catalog → builder → BOM → export, plus the Design ↔ Vignette mode toggle |
+| `src/app.js` | Integration shell — wires catalog → builder → BOM → export, plus the Design · Vignette · **Lab** mode toggle (Generate button, slider tuning, PDF export, `#g=<seed>` permalink) |
 
 All dimensions are **metric, authored in millimetres**. The 3D scene works in metres
 internally; everything else stays in mm. Prices are rough SEK builder's-merchant
@@ -84,6 +95,11 @@ estimates for ballparking, not quotes.
 - ✅ A CNC **slot-together family** (stool, lounge chair, bench, oval rocker, table)
 - ✅ **Vignette / Shuffle** arrangements — reproducible hangout scenes with a combined
   BOM + cut sheet, shareable via `#v=<seed>` permalinks
+- ✅ **Generative phase 1** — the Design Lab *invents* validity-gated, first-class
+  slot-together pieces from a seed (spine-variation), tunable and exportable, shareable
+  via `#g=<seed>`; generated pieces now also appear in shuffled vignettes
+- **Generative phase 2** — *morph*: blend/interpolate between two seeds or designs
+- **Generative phases 3–4** — new generated piece *types* beyond the chair/lounger spine
 - **DXF** export of panel outlines straight to the CNC
 - Screw-position markers + assembly-step playback in 3D
 - Per-design wind/anchoring detail (Nowhere gusts)

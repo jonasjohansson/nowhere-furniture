@@ -20,7 +20,7 @@ import {
   ERGO, beam, plank, leg, panel, cleat, frameBase, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   panelSupportSpacing, difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=23';
+} from '../engineering.js?v=24';
 
 // Small local readability helpers (pure). Thickness/section pulled from stock so
 // a sheet part can never disagree with its material.

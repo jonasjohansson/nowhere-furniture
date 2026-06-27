@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=23';
-import { mulberry32 } from '../src/rng.js?v=23';
-import { sampleParams } from '../src/sample_params.js?v=23';
+import { CNC_SLOT } from '../src/designs/cnc_slot.js?v=24';
+import { mulberry32 } from '../src/rng.js?v=24';
+import { sampleParams } from '../src/sample_params.js?v=24';
 
 test('sampleParams: in-range, step-snapped, deterministic, buildable', () => {
   for (const d of CNC_SLOT) {
@@ -25,7 +25,7 @@ test('sampleParams varies with the seed', () => {
   assert.ok(sets.size > 1, 'different seeds yield different params');
 });
 
-import { VIGNETTE_TEMPLATES } from '../src/vignette_templates.js?v=23';
+import { VIGNETTE_TEMPLATES } from '../src/vignette_templates.js?v=24';
 
 const FAMILY = new Set(['cnc-slot-stool','cnc-slot-lounge','cnc-slot-bench','cnc-slot-oval-rocker','cnc-slot-table']);
 const PALETTE = { base: 30, hues: [20, 35, 50] };
@@ -47,7 +47,7 @@ test('templates: >=5, each lays out >=2 valid family pieces, deterministically',
   }
 });
 
-import { generateVignette } from '../src/vignette.js?v=23';
+import { generateVignette } from '../src/vignette.js?v=24';
 
 test('generateVignette: deterministic, valid, overlap-free', () => {
   const a = generateVignette(42), b = generateVignette(42);
@@ -58,7 +58,9 @@ test('generateVignette: deterministic, valid, overlap-free', () => {
   // pieces are valid family + carry params/transform/hue
   const VFAMILY = new Set(['cnc-slot-stool','cnc-slot-lounge','cnc-slot-bench','cnc-slot-oval-rocker','cnc-slot-table']);
   for (const p of a.pieces) {
-    assert.ok(VFAMILY.has(p.designId) && p.params && p.transform && p.hue >= 0 && p.hue < 360);
+    // a piece is either a catalog family design or a generated one (gen-*)
+    const known = VFAMILY.has(p.designId) || p.designId.startsWith('gen-');
+    assert.ok(known && p.params && p.transform && p.hue >= 0 && p.hue < 360);
   }
 });
 test('generateVignette: different seeds differ; many seeds stay non-coincident', () => {
@@ -74,13 +76,15 @@ test('generateVignette: different seeds differ; many seeds stay non-coincident',
   }
 });
 
-import { composeVignette } from '../src/vignette.js?v=23';
+import { composeVignette } from '../src/vignette.js?v=24';
 
 test('composeVignette: concatenates all pieces deterministically', () => {
   const v = generateVignette(42);
   const out = composeVignette(v);
   assert.ok(Array.isArray(out.parts) && Array.isArray(out.joints));
-  const expected = v.pieces.reduce((n,p)=> n + CNC_SLOT.find(d=>d.id===p.designId).build(p.params).parts.length, 0);
+  // resolve catalog OR generated designs (a vignette may include gen-* pieces)
+  const resolve = (id) => (v.generated && v.generated[id]) || CNC_SLOT.find(d=>d.id===id);
+  const expected = v.pieces.reduce((n,p)=> n + resolve(p.designId).build(p.params).parts.length, 0);
   assert.equal(out.parts.length, expected, 'parts = sum of pieces');
   assert.ok(out.joints.length > 0);
   // unique refs
@@ -108,4 +112,31 @@ test('composeVignette tint can be disabled', () => {
   const plain = composeVignette(v, { tint:false });
   assert.ok(tinted.parts.every(p=>p.color!=null), 'tinted parts have color');
   // plain: colors not forced by compose (either undefined or the design's own)
+});
+
+import { generateDesign } from '../src/generate.js?v=24';
+
+test('vignette can include generated pieces, deterministically', () => {
+  // sweep seeds to find at least one vignette that used a generated design
+  let found = null;
+  for (let s = 0; s < 60 && !found; s++) {
+    const v = generateVignette(s);
+    if (v.pieces.some(p => p.designId.startsWith('gen-'))) found = { s, v };
+  }
+  assert.ok(found, 'some seed produces a vignette with a generated piece');
+  const { s, v } = found;
+  // the vignette carries a registry of its generated designs
+  assert.ok(v.generated && typeof v.generated === 'object', 'has generated map');
+  for (const p of v.pieces) if (p.designId.startsWith('gen-'))
+    assert.ok(v.generated[p.designId] && typeof v.generated[p.designId].build === 'function',
+      'generated design is in the map');
+  // deterministic: same seed reproduces identical vignette + composition
+  assert.deepEqual(generateVignette(s), generateVignette(s));
+  const a = composeVignette(generateVignette(s));
+  const b = composeVignette(generateVignette(s));
+  assert.deepEqual(a, b, 'compose deterministic with generated pieces');
+  // compose resolves generated designs: part count = sum over pieces (catalog OR generated)
+  const resolve = (id) => v.generated[id] || CNC_SLOT.find(d => d.id === id);
+  const expected = v.pieces.reduce((n,p)=> n + resolve(p.designId).build(p.params).parts.length, 0);
+  assert.equal(a.parts.length, expected);
 });

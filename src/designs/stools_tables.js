@@ -22,7 +22,7 @@ import {
   ERGO, beam, plank, leg, panel, cleat, frameBase, slatField,
   buttJoint, panelEdgeJoint, faceJoint, panelSupportSpacing,
   difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=23';
+} from '../engineering.js?v=24';
 
 // Small local readability helpers (pure lookups, not box-builders).
 const PLY = (key) => SHEETS[key].thickness;       // sheet thickness in mm

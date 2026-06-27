@@ -20,7 +20,7 @@ import {
   ERGO, beam, leg, panel, cleat, slatField,
   buttJoint, panelEdgeJoint, faceJoint, beamMaxSpan, bearersFor,
   difficultyOf, SHEETS, TIMBER,
-} from '../engineering.js?v=23';
+} from '../engineering.js?v=24';
 
 // Small local conveniences (kept pure). Thickness of a sheet key; section of a
 // timber key. These only READ the shared tables — they don't redefine shapes.
