@@ -213,7 +213,7 @@ export function composeVignette(vignette, { tint = true } = {}) {
   const parts = [];
   const joints = [];
   vignette.pieces.forEach((piece, i) => {
-    const design = vignette.generated?.[piece.designId] || CNC_SLOT.find((d) => d.id === piece.designId);
+    const design = resolveDesign(piece.designId, vignette.generated);
     const built = design.build(piece.params);
     const RY = piece.transform.ry * Math.PI / 180;
     const c = Math.cos(RY), s = Math.sin(RY);

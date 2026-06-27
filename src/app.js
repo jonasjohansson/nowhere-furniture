@@ -423,7 +423,11 @@ function setAppMode(next) {
     if (currentLabSeed != null) showLab(currentLabSeed);
     else generateLab();
   } else {
-    selectDesign(currentDesign?.id || 'board-stool');
+    // Restore a CATALOG design. currentDesign may be a generated piece (id 'gen-…')
+    // from Lab mode, which selectDesign can't find — fall back to the default so the
+    // canvas doesn't keep showing the Lab piece with no active catalog item.
+    const inCatalog = CATALOG.some((d) => d.id === currentDesign?.id);
+    selectDesign(inCatalog ? currentDesign.id : 'board-stool');
   }
 }
 
