@@ -58,7 +58,9 @@ test('generateVignette: deterministic, valid, overlap-free', () => {
   // pieces are valid family + carry params/transform/hue
   const VFAMILY = new Set(['cnc-slot-stool','cnc-slot-lounge','cnc-slot-bench','cnc-slot-oval-rocker','cnc-slot-table']);
   for (const p of a.pieces) {
-    assert.ok(VFAMILY.has(p.designId) && p.params && p.transform && p.hue >= 0 && p.hue < 360);
+    // a piece is either a catalog family design or a generated one (gen-*)
+    const known = VFAMILY.has(p.designId) || p.designId.startsWith('gen-');
+    assert.ok(known && p.params && p.transform && p.hue >= 0 && p.hue < 360);
   }
 });
 test('generateVignette: different seeds differ; many seeds stay non-coincident', () => {
@@ -80,7 +82,9 @@ test('composeVignette: concatenates all pieces deterministically', () => {
   const v = generateVignette(42);
   const out = composeVignette(v);
   assert.ok(Array.isArray(out.parts) && Array.isArray(out.joints));
-  const expected = v.pieces.reduce((n,p)=> n + CNC_SLOT.find(d=>d.id===p.designId).build(p.params).parts.length, 0);
+  // resolve catalog OR generated designs (a vignette may include gen-* pieces)
+  const resolve = (id) => (v.generated && v.generated[id]) || CNC_SLOT.find(d=>d.id===id);
+  const expected = v.pieces.reduce((n,p)=> n + resolve(p.designId).build(p.params).parts.length, 0);
   assert.equal(out.parts.length, expected, 'parts = sum of pieces');
   assert.ok(out.joints.length > 0);
   // unique refs
